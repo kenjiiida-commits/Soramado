@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QLabel, QMai
 
 from . import __version__, astro, textures
 from .bodies import BODIES, BY_KEY
-from .view import SpaceView
+from .view import SpaceView, format_length
+from . import galaxies as gx
 
 SPEEDS = [
     ("実時間", 1.0),
@@ -37,23 +38,22 @@ HELP_TEXT = """<h3>操作方法</h3>
 <table cellpadding="3">
 <tr><td><b>左ドラッグ</b></td><td>視点を回す</td></tr>
 <tr><td><b>ホイール</b> / <b>右ドラッグ</b></td><td>近づく・離れる</td></tr>
-<tr><td><b>ダブルクリック</b></td><td>惑星へ移動する／恒星の情報を見る</td></tr>
+<tr><td><b>ダブルクリック</b></td><td>惑星・銀河へ移動する／恒星の情報を見る</td></tr>
 <tr><td><b>スペース</b></td><td>時間を止める・動かす</td></tr>
 <tr><td><b>+ / −</b></td><td>近づく・離れる</td></tr>
 <tr><td><b>F11</b></td><td>全画面表示</td></tr>
 </table>
 <p>「惑星の大きさ」を上げると、惑星を実際より大きく描きます（太陽は最大10倍）。
 実寸（×1）では、遠くから見ると惑星は点と名前だけになります。</p>
-<p>「星の数」で、何等星まで表示するかを変えられます。肉眼で見えるのは 6.5 等くらいまでです。</p>"""
+<p>「星の数」で、何等星まで表示するかを変えられます。肉眼で見えるのは 6.5 等くらいまでです。</p>
+<p>ホイールでどこまでも引いていくと、近くの恒星 → 天の川銀河 → 近くの銀河 と、宇宙の大きさを旅できます。
+「見る天体」から銀河を選ぶと、その銀河まで飛んでいきます。銀河の形は模式図です。</p>"""
 
 
 def _fmt_dist(au: float) -> str:
-    km = au * astro.AU_KM
-    if au >= 0.1:
+    if 0.1 <= au < 1000:
         return f"{au:,.3f} AU"
-    if km >= 1e4:
-        return f"{km / 1e4:,.1f} 万km"
-    return f"{km:,.0f} km"
+    return format_length(au)
 
 
 class MainWindow(QMainWindow):
@@ -95,6 +95,11 @@ class MainWindow(QMainWindow):
         self.cb_target = QComboBox()
         for key in TARGET_ORDER:
             self.cb_target.addItem(BY_KEY[key].name, key)
+        self.cb_target.insertSeparator(self.cb_target.count())
+        for g in gx.GALAXIES:
+            if g.in_menu:
+                self.cb_target.addItem(g.name, g.key)
+        self.cb_target.setMaxVisibleItems(30)
         self.cb_target.activated.connect(lambda i: self.view.set_target(self.cb_target.itemData(i)))
         tb.addWidget(self.cb_target)
 
@@ -191,6 +196,7 @@ class MainWindow(QMainWindow):
         self.act_conl = self._toggle(m_view, "星座線", "show_con_lines")
         self.act_conn = self._toggle(m_view, "星座名", "show_con_names")
         self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
+        self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
         m_view.addSeparator()
         act_full = QAction("全画面表示", self, checkable=True)
         act_full.setShortcut(QKeySequence("F11"))
@@ -270,6 +276,11 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         key = v.target
+        if key in gx.BY_KEY:
+            self.status_info.setText(gx.describe(gx.BY_KEY[key]) + "　｜　視点の距離 "
+                                     + format_length(v.dist))
+            self._refresh_warn(v)
+            return
         b = BY_KEY[key]
         parts = [f"<b>{b.name}</b>", f"半径 {b.radius_km:,.0f} km"]
         if key != "sun":
@@ -363,6 +374,7 @@ class MainWindow(QMainWindow):
             "・天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）<br>"
             "・恒星: HYG データベース v4.1（CC BY-SA 4.0）<br>"
             "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"
+            "・銀河: 位置・距離・大きさは文献のおおよその値。形は粒子で作った模式図<br>"
             "・惑星の画像（ダウンロードした場合）: "
             "<a href='https://www.solarsystemscope.com/textures/'>Solar System Scope</a>"
             "（CC BY 4.0）</p>"

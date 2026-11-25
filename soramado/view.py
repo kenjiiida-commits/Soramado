@@ -7,13 +7,14 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QMatrix4x4, QPainter, QPen, QVector2D, QVector3D, QVector4D
+from PySide6.QtGui import QColor, QFont, QMatrix3x3, QMatrix4x4, QPainter, QPen, QVector2D, QVector3D, QVector4D
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture,
                               QOpenGLVertexArrayObject)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from . import astro, shaders, textures
 from .stars import StarCatalog
+from . import galaxies as gx
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -36,10 +37,31 @@ GL_PROGRAM_POINT_SIZE = 0x8642
 
 FOV_DEG = 45.0
 NEAR_AU = 1e-10
-FAR_AU = 1e5
+FAR_AU = 1e14
 LOGC = astro.AU_KM            # 対数デプスは km 単位で計算する
-MAX_DIST_AU = 400.0
+MAX_DIST_AU = 2e13           # 約3億光年
+LY_AU = gx.LY_AU
 KM = 1.0 / astro.AU_KM
+
+
+def format_length(au: float) -> str:
+    """長さを分かりやすい単位で表す（km・AU・光年）。"""
+    if au < 0.1:
+        km = au * astro.AU_KM
+        return f"{km / 1e4:,.1f} 万km" if km >= 1e4 else f"{km:,.0f} km"
+    ly = au / gx.LY_AU
+    if ly < 0.1:
+        return f"{au:,.1f} AU" if au < 100 else f"{au:,.0f} AU"
+    if ly < 1e4:
+        return f"{ly:,.1f} 光年" if ly < 100 else f"{ly:,.0f} 光年"
+    if ly < 1e8:
+        return f"{ly / 1e4:,.1f} 万光年" if ly < 1e5 else f"{ly / 1e4:,.0f} 万光年"
+    return f"{ly / 1e8:,.1f} 億光年"
+
+
+def _smooth(a, b, x):
+    t = min(1.0, max(0.0, (x - a) / (b - a)))
+    return t * t * (3 - 2 * t)
 
 
 def _qmat(m: np.ndarray) -> QMatrix4x4:
@@ -145,9 +167,9 @@ class _Mesh:
         self.vbo.release()
         self.count = len(data)
 
-    def draw(self, f, count=None):
+    def draw(self, f, count=None, first=0):
         self.vao.bind()
-        f.glDrawArrays(self.mode, 0, self.count if count is None else count)
+        f.glDrawArrays(self.mode, first, self.count if count is None else count)
         self.vao.release()
 
 
@@ -183,6 +205,7 @@ class SpaceView(QOpenGLWidget):
         self.show_star_names = True
         self.limit_mag = 6.5
         self.selected_star = -1
+        self.show_galaxies = True
 
         # カメラ（注視点のまわりを回る）
         self.target = "sun"
@@ -212,17 +235,16 @@ class SpaceView(QOpenGLWidget):
         self.timeChanged.emit(self.jd)
         self.update()
 
+    def is_galaxy(self, key: str) -> bool:
+        return key in gx.BY_KEY
+
     def set_target(self, key: str, fly: bool = True):
-        if key not in BY_KEY:
+        if key not in BY_KEY and key not in gx.BY_KEY:
             return
         new_dist = self._default_dist(key)
         self.selected_star = -1
         if fly:
-            self._fly = {
-                "from_focus": self._focus(), "from_key": self.target, "to": key,
-                "from_dist": self.dist, "to_dist": new_dist, "t0": time.monotonic(),
-                "dur": 1.6,
-            }
+            self._start_fly(key, new_dist, self._galaxy_view_dir(key))
         else:
             self.dist = new_dist
         self.target = key
@@ -230,10 +252,43 @@ class SpaceView(QOpenGLWidget):
         self.update()
 
     def overview(self):
+        self.selected_star = -1
+        self._start_fly("sun", 70.0, None)
         self.target = "sun"
         self.targetChanged.emit("sun")
-        self._fly = {"from_focus": self._focus(), "from_key": None, "to": "sun",
-                     "from_dist": self.dist, "to_dist": 70.0, "t0": time.monotonic(), "dur": 2.0}
+
+    def _start_fly(self, to_key, to_dist, view_dir):
+        from_focus = self._focus()
+        sep = float(np.linalg.norm(self.display_pos(to_key) - from_focus))
+        d0, d1 = self.dist, to_dist
+        # 遠くへ行くときは、いったん引いて両方が見える高さを通る
+        arc = max(0.0, math.log(max(sep, 1e-12) * 1.3) - max(math.log(d0), math.log(d1)))
+        fl = {"from_focus": from_focus, "from_key": self.target, "to": to_key,
+              "from_dist": d0, "to_dist": d1, "arc": arc, "t0": time.monotonic(),
+              "dur": min(4.5, 1.6 + 0.35 * max(0.0, math.log10(max(sep / max(min(d0, d1), 1e-12), 1.0))))}
+        if view_dir is not None:
+            yaw1 = math.atan2(view_dir[1], view_dir[0])
+            dy = (yaw1 - self.yaw + math.pi) % (2 * math.pi) - math.pi
+            fl.update(yaw0=self.yaw, dyaw=dy, pitch0=self.pitch,
+                      pitch1=math.asin(max(-0.99, min(0.99, view_dir[2]))))
+        self._fly = fl
+
+    def _galaxy_view_dir(self, key):
+        """銀河へ行くときの見下ろす向き（カメラが注視点のどちら側にいるか）。"""
+        if not self.is_galaxy(key):
+            return None
+        g = gx.BY_KEY[key]
+        normal = g.rot[:, 2]
+        if g.kind == "milkyway":
+            # 銀河北極の側から、太陽のある側を手前にして見下ろす
+            v = normal * math.cos(math.radians(50)) - g.rot[:, 0] * math.sin(math.radians(50))
+        else:
+            to_us = -g.center / np.linalg.norm(g.center)
+            if np.dot(normal, to_us) < 0:
+                normal = -normal
+            # 地球から見える向きに近い角度から、少しだけ傾けて見る
+            v = to_us * 0.85 + normal * 0.45
+        return v / np.linalg.norm(v)
 
     def set_magnify(self, m: float):
         self.magnify = m
@@ -243,6 +298,8 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- 大きさ・位置
 
     def display_radius(self, key: str) -> float:
+        if key in gx.BY_KEY:
+            return gx.BY_KEY[key].radius_kpc * gx.KPC_AU
         b = BY_KEY[key]
         m = min(self.magnify, 10.0) if key == "sun" else self.magnify
         return b.radius_km * KM * m
@@ -252,15 +309,21 @@ class SpaceView(QOpenGLWidget):
         return max(1.0, self.magnify / 30.0)
 
     def display_pos(self, key: str) -> np.ndarray:
+        if key in gx.BY_KEY:
+            return gx.BY_KEY[key].center
         if key == "moon":
             e = self.positions["earth"]
             return e + (self.positions["moon"] - e) * self.moon_scale()
         return self.positions[key]
 
     def _min_dist(self, key):
+        if key in gx.BY_KEY:
+            return self.display_radius(key) * 0.05
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
+        if key in gx.BY_KEY:
+            return self.display_radius(key) * (2.3 if key == "g:mw" else 2.8)
         if key == "sun":
             return max(5.0, self._min_dist("sun") * 4)
         r = self.display_radius(key)
@@ -275,6 +338,10 @@ class SpaceView(QOpenGLWidget):
             s = s * s * (3 - 2 * s)
             # 移動元の天体も動き続けるので、その時点の位置から補間する
             a = fl["from_focus"] if fl["from_key"] is None else self.display_pos(fl["from_key"])
+            if fl.get("arc", 0) > 0.5:
+                # 遠距離の移動：視点が十分に引いてから横へ動く
+                s = min(1.0, max(0.0, (s - 0.25) / 0.5))
+                s = s * s * (3 - 2 * s)
             return a + (self.display_pos(fl["to"]) - a) * s
         return self.display_pos(self.target)
 
@@ -294,7 +361,11 @@ class SpaceView(QOpenGLWidget):
             fl = self._fly
             s = min(1.0, (now - fl["t0"]) / fl["dur"])
             e = s * s * (3 - 2 * s)
-            self.dist = math.exp(math.log(fl["from_dist"]) * (1 - e) + math.log(fl["to_dist"]) * e)
+            self.dist = math.exp(math.log(fl["from_dist"]) * (1 - e) + math.log(fl["to_dist"]) * e
+                                 + 4.0 * e * (1 - e) * fl.get("arc", 0.0))
+            if "dyaw" in fl:
+                self.yaw = fl["yaw0"] + fl["dyaw"] * e
+                self.pitch = fl["pitch0"] + (fl["pitch1"] - fl["pitch0"]) * e
             if s >= 1.0:
                 self._fly = None
         self.update()
@@ -327,6 +398,8 @@ class SpaceView(QOpenGLWidget):
         self.p_star = prog(shaders.STAR_VS, shaders.STAR_FS)
         self.m_stars = _Mesh(self.stars.vertex_data(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
+        self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
+        self.m_galaxies = _Mesh(gx.build(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
 
         self.m_sphere = _Mesh(_sphere_mesh(), [(0, 3), (1, 2)], GL_TRIANGLES)
         self.m_ring = _Mesh(_ring_mesh(), [(0, 3)], GL_TRIANGLE_STRIP)
@@ -407,6 +480,32 @@ class SpaceView(QOpenGLWidget):
         self._moon_orbit_jd = self.jd
         self._moon_orbit_at = time.monotonic()
 
+    def _draw_galaxies(self, f, viewproj, eye, focal, h):
+        p = self.p_galaxy
+        p.bind()
+        p.setUniformValue("u_viewproj", _qmat(viewproj))
+        p.setUniformValue1f("u_kpc", float(gx.KPC_AU))
+        p.setUniformValue1f("u_focal", float(focal))
+        p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
+        for g in gx.GALAXIES:
+            c = g.center - eye
+            d = float(np.linalg.norm(c))
+            fade = 1.0
+            if g.kind == "milkyway":
+                # 太陽の近くでは天の川銀河の模式図は出さない（本物の星を見せる）
+                fade = _smooth(300 * LY_AU, 6000 * LY_AU, self._sun_far)
+            if fade <= 0.01:
+                continue
+            r_px = min(g.radius_kpc * gx.KPC_AU / max(d, 1.0) * focal, h * 0.9)
+            flux = 0.9 * max(r_px * r_px, 400.0) / g.n * fade
+            # 列ベクトルが銀河の軸。kpc の局所座標を AU に直す行列
+            m3 = QMatrix3x3([float(v) for v in (g.rot * gx.KPC_AU).reshape(-1)])
+            p.setUniformValue("u_rot", m3)
+            p.setUniformValue("u_center", QVector3D(*c))
+            p.setUniformValue1f("u_flux", float(flux))
+            self.m_galaxies.draw(f, g.n, g.first)
+        p.release()
+
     def _common(self, p, viewproj):
         p.setUniformValue("u_viewproj", _qmat(viewproj))
         p.setUniformValue1f("u_logc", float(LOGC))
@@ -448,18 +547,27 @@ class SpaceView(QOpenGLWidget):
 
         rel = {b.key: self.display_pos(b.key) - eye for b in BODIES}
         sun_rel = rel["sun"]
+        sun_far = float(np.linalg.norm(sun_rel))       # 太陽からカメラまで [AU]
+        self._sun_far = sun_far
+        focal = h / (2 * math.tan(math.radians(FOV_DEG) / 2))
+        # 星座は太陽の近くから見たときだけ意味があるので、離れるほど薄くする
+        self._con_fade = 1.0 - _smooth(2000.0, 0.8 * LY_AU, sun_far)
 
         # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
         f.glDisable(GL_DEPTH_TEST)
         f.glEnable(GL_BLEND)
         f.glBlendFunc(GL_ONE, GL_ONE)
-        if self.show_con_lines:
+        f.glEnable(GL_PROGRAM_POINT_SIZE)
+        if self.show_galaxies:
+            self._draw_galaxies(f, viewproj, eye, focal, h)
+        if self.show_con_lines and self._con_fade > 0.01:
             p = self.p_line
             p.bind()
             self._common(p, viewproj)
             p.setUniformValue("u_offset", QVector3D(0, 0, 0))
             p.setUniformValue1f("u_scale", 1000.0)
-            p.setUniformValue("u_color", QVector4D(0.10, 0.18, 0.34, 1.0))
+            k = self._con_fade
+            p.setUniformValue("u_color", QVector4D(0.10 * k, 0.18 * k, 0.34 * k, 1.0))
             self.m_conlines.draw(f)
             p.release()
         if self.show_stars:
@@ -471,6 +579,7 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1f("u_limit", float(self.limit_mag))
             p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
             p.setUniformValue1f("u_gain", 1.0)
+            p.setUniformValue1i("u_hide_unknown", int(sun_far > 3000.0))
             self.m_stars.draw(f)
             p.release()
         f.glDisable(GL_BLEND)
@@ -543,7 +652,7 @@ class SpaceView(QOpenGLWidget):
             p.release()
 
         # ---- 軌道
-        if self.show_orbits:
+        if self.show_orbits and sun_far < 2e5:
             p = self.p_line
             p.bind()
             self._common(p, viewproj)
@@ -578,13 +687,18 @@ class SpaceView(QOpenGLWidget):
             ndc = clip[:2] / clip[3]
             pix_per_ndc = h / 2
             core_px = self.display_radius("sun") / clip[3] * (1 / math.tan(math.radians(FOV_DEG) / 2)) * pix_per_ndc
-            glow_px = max(core_px * 3.0, 28.0)
+            # 太陽の明るさ（離れると暗い星になる）: 絶対等級 4.83
+            m_sun = 4.83 + 5 * math.log10(max(clip[3], 1e-9) / 206264.806 / 10.0)
+            li = -0.4 * (m_sun - self.limit_mag)
+            glow_px = max(core_px * 3.0, min(28.0, 2.5 + 2.2 * li))
+            glow_k = min(1.0, 0.3 + 0.35 * li)
+        if clip[3] > 0 and glow_px > 1.5:
             f.glBlendFunc(GL_ONE, GL_ONE)
             p = self.p_glow
             p.bind()
             p.setUniformValue("u_center", QVector2D(*ndc))
             p.setUniformValue("u_size", QVector2D(glow_px / (w / 2), glow_px / (h / 2)))
-            p.setUniformValue("u_color", QVector3D(1.0, 0.78, 0.45))
+            p.setUniformValue("u_color", QVector3D(1.0 * glow_k, 0.78 * glow_k, 0.45 * glow_k))
             p.setUniformValue1f("u_core", float(min(core_px / glow_px, 0.9)))
             depth = math.log2(1.0 + LOGC * clip[3]) / math.log2(FAR_AU * LOGC + 1.0)
             p.setUniformValue1f("u_depth", float(depth))
@@ -620,7 +734,10 @@ class SpaceView(QOpenGLWidget):
         order = sorted(BODIES, key=lambda b: (b.key != self.target, b.key != "sun", -b.radius_km))
         placed = []
         fm = painter.fontMetrics()
+        far = getattr(self, "_sun_far", 0.0) > 3000.0
         for b in order:
+            if far and b.key != "sun":
+                continue          # 太陽系から遠く離れると惑星は太陽に重なるので出さない
             pr = self._project(rel[b.key], viewproj, w, h)
             if pr is None:
                 continue
@@ -649,27 +766,75 @@ class SpaceView(QOpenGLWidget):
             painter.setPen(QPen(QColor(0, 0, 0, 180)))
             painter.drawText(QPointF(x + off + 1, y - off * 0.3 + 1), b.name)
             painter.setPen(QPen(col.lighter(130) if b.key == self.target else col))
-            painter.drawText(QPointF(x + off, y - off * 0.3), b.name)
+            painter.drawText(QPointF(x + off, y - off * 0.3), b.name if not far else "太陽（太陽系）")
 
+        self._draw_galaxy_labels(painter, viewproj, w, h, placed, fm, focal)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
+        self._draw_scale(painter, w, h)
         painter.end()
+
+    def _draw_galaxy_labels(self, painter, viewproj, w, h, placed, fm, focal):
+        if not self.show_galaxies:
+            return
+        eye = self._eye
+        for g in gx.GALAXIES:
+            c = g.center - eye
+            d = float(np.linalg.norm(c))
+            if d < g.radius_kpc * gx.KPC_AU * 0.6:
+                continue          # 銀河の中にいるときは名前を出さない
+            if g.kind == "milkyway" and self._sun_far < 300 * LY_AU:
+                continue
+            pr = self._project(c, viewproj, w, h)
+            if not pr:
+                continue
+            x, y, _ = pr
+            r_px = g.radius_kpc * gx.KPC_AU / d * focal
+            self._screen[g.key] = (x, y, max(r_px, 6.0))
+            if not (0 < x < w and 0 < y < h):
+                continue
+            rect = fm.boundingRect(g.name)
+            ty = y + min(r_px, h * 0.4) * 0.55 + 14
+            rect.moveCenter(QPointF(x, ty).toPoint())
+            if any(rect.intersects(r) for r in placed):
+                continue
+            placed.append(rect)
+            painter.setPen(QPen(QColor(0, 0, 0, 180)))
+            painter.drawText(rect.translated(1, 1), Qt.AlignCenter, g.name)
+            painter.setPen(QPen(QColor(235, 200, 255) if g.key == self.target else QColor(200, 170, 235)))
+            painter.drawText(rect, Qt.AlignCenter, g.name)
+
+    def _draw_scale(self, painter, w, h):
+        """画面の横幅がどれくらいの長さかを左下に出す。"""
+        width_au = 2 * self.dist * math.tan(math.radians(FOV_DEG) / 2) * w / h
+        painter.setPen(QPen(QColor(170, 180, 200)))
+        painter.drawText(QPointF(12, h - 12), "画面の横幅 約 " + format_length(width_au))
 
     def _sky_xy(self, direction, viewproj, w, h):
         return self._project(direction * 1000.0, viewproj, w, h)
 
     def _draw_sky_labels(self, painter, viewproj, w, h, placed, fm):
         cat = self.stars
+        eye = self._eye
+
+        def star_dir(i):
+            v = cat.pos_pc[i] * 206264.806 - eye
+            return v / np.linalg.norm(v)
+
+        def star_mag(i):
+            v = cat.pos_pc[i] * 206264.806 - eye
+            return cat.mag[i] + 5 * math.log10(max(np.linalg.norm(v), 1.0) / max(cat.dist_pc[i] * 206264.806, 1.0))
+
         # 選んだ星の印
         if self.selected_star >= 0 and self.show_stars:
-            pr = self._sky_xy(cat.dir[self.selected_star], viewproj, w, h)
+            pr = self._sky_xy(star_dir(self.selected_star), viewproj, w, h)
             if pr:
                 painter.setPen(QPen(QColor(120, 220, 255), 1.4))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawEllipse(QPointF(pr[0], pr[1]), 9, 9)
         # 星座名
-        if self.show_con_names:
+        if self.show_con_names and self._con_fade > 0.05:
             font = painter.font()
-            painter.setPen(QPen(QColor(80, 115, 180, 190)))
+            painter.setPen(QPen(QColor(80, 115, 180, int(190 * self._con_fade))))
             for c in cat.constellations:
                 pr = self._sky_xy(c.center, viewproj, w, h)
                 if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
@@ -684,10 +849,15 @@ class SpaceView(QOpenGLWidget):
         # 星の名前（明るい順）
         if self.show_star_names and self.show_stars:
             painter.setPen(QPen(QColor(200, 200, 170, 220)))
+            far = self._sun_far > 3000.0
             for i in cat.labeled:
-                if cat.mag[i] > self.limit_mag:
+                if far and cat.dist_pc[i] > 99999:
+                    continue
+                if (star_mag(i) if far else cat.mag[i]) > self.limit_mag:
+                    if far:
+                        continue
                     break
-                pr = self._sky_xy(cat.dir[i], viewproj, w, h)
+                pr = self._sky_xy(star_dir(i), viewproj, w, h)
                 if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
                     continue
                 name = cat.short_name(i)
@@ -703,10 +873,16 @@ class SpaceView(QOpenGLWidget):
         if vp is None or not self.show_stars:
             return -1
         cat = self.stars
-        n = int(np.searchsorted(cat.mag, self.limit_mag, side="right"))
-        if n == 0:
+        rel = cat.pos_pc * 206264.806 - self._eye
+        dist = np.maximum(np.linalg.norm(rel, axis=1), 1.0)
+        app = cat.mag + 5 * np.log10(dist / np.maximum(cat.dist_pc * 206264.806, 1.0))
+        vis = app <= self.limit_mag
+        if self._sun_far > 3000.0:
+            vis &= cat.dist_pc < 99999
+        idx = np.nonzero(vis)[0]
+        if len(idx) == 0:
             return -1
-        d = cat.dir[:n] * 1000.0
+        d = rel[idx] / dist[idx, None] * 1000.0
         clip = d @ vp[:3, :3].T + vp[:3, 3]
         wc = d @ vp[3, :3] + vp[3, 3]
         ok = wc > 0
@@ -717,7 +893,7 @@ class SpaceView(QOpenGLWidget):
         near = np.nonzero(dist < radius)[0]
         if len(near) == 0:
             return -1
-        return int(near[0])       # 明るい順に並んでいるので先頭が最も明るい
+        return int(idx[near[np.argmin(app[idx[near]])]])   # 近くでいちばん明るい星
 
     # ---------------------------------------------------------- マウス・キー
 

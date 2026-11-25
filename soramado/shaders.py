@@ -194,10 +194,17 @@ uniform mat4 u_viewproj;
 uniform float u_limit;                // 見える限界の等級
 uniform float u_px;                   // 画面の拡大率（高解像度画面用）
 uniform float u_gain;                 // 星の明るさの調整
+uniform int u_hide_unknown;           // 距離不明の星を隠す（太陽系から遠く離れたとき）
 out vec3 v_col;
 void main() {
     vec3 rel = a_pos - u_eye;
     float d = max(length(rel), 1e-6);
+    if (u_hide_unknown == 1 && a_dist > 1.5e10) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        gl_PointSize = 0.0;
+        v_col = vec3(0.0);
+        return;
+    }
     // カメラの位置から見た等級（遠ざかれば暗く、近づけば明るく）
     float m = a_mag + 5.0 * log(d / a_dist) / log(10.0);
     float li = -0.4 * (m - u_limit);          // log10(明るさ / 限界の明るさ)
@@ -224,5 +231,40 @@ void main() {
     if (r2 > 1.0) discard;
     float k = exp(-r2 * 4.0) + 0.3 * exp(-r2 * 1.2);
     frag = vec4(v_col * k, 1.0);
+}
+"""
+
+# ---------------------------------------------------------------- 銀河（粒子）
+GALAXY_VS = """#version 330 core
+layout(location=0) in vec3 a_pos;     // 銀河の局所座標 [kpc]
+layout(location=1) in float a_size;   // 粒子の大きさ [kpc]
+layout(location=2) in float a_w;      // 明るさの重み
+layout(location=3) in vec3 a_rgb;
+uniform vec3 u_center;                // 銀河中心（カメラ原点）[AU]
+uniform mat3 u_rot;                   // 銀河の向き × (AU/kpc)
+uniform float u_kpc;                  // 1 kpc [AU]
+uniform mat4 u_viewproj;
+uniform float u_focal;                // 距離1で1単位の物が何ピクセルか
+uniform float u_flux;                 // 銀河全体の明るさ
+uniform float u_px;
+out vec3 v_col;
+void main() {
+    vec3 w = u_center + u_rot * a_pos;
+    float d = max(length(w), 1.0);
+    gl_Position = u_viewproj * vec4(w / d * 1000.0, 1.0);
+    float px = clamp(a_size * u_kpc / d * u_focal, 1.0, 40.0);
+    gl_PointSize = px * u_px;
+    v_col = a_rgb * min(a_w * u_flux / (px * px), 1.5);
+}
+"""
+
+GALAXY_FS = """#version 330 core
+in vec3 v_col;
+out vec4 frag;
+void main() {
+    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(p, p);
+    if (r2 > 1.0) discard;
+    frag = vec4(v_col * exp(-r2 * 3.0), 1.0);
 }
 """
