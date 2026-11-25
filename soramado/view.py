@@ -500,6 +500,10 @@ class SpaceView(QOpenGLWidget):
             m3 = QMatrix3x3([float(v) for v in (g.rot * gx.KPC_AU).reshape(-1)])
             p.setUniformValue("u_rot", m3)
             p.setUniformValue("u_center", QVector3D(*c))
+            # 画面上で小さい銀河は、点が重なりにくく暗く見えるので明るくする（見やすさのため）
+            r_px = g.radius_kpc * gx.KPC_AU / max(d, 1.0) * focal
+            boost = min(25.0, max(1.0, (60.0 / max(r_px, 1e-3)) ** 1.2))
+            p.setUniformValue1f("u_boost", float(boost))
             p.setUniformValue1f("u_k", float(g.k))
             p.setUniformValue1f("u_fade", float(fade))
             self.m_galaxies.draw(f, g.n, g.first)

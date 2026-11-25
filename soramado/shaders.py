@@ -247,6 +247,7 @@ uniform mat4 u_viewproj;
 uniform float u_focal;                // 距離1で1単位の物が何ピクセルか
 uniform float u_k;                    // 銀河ごとの明るさの係数（表面輝度が一定になるように決めたもの）
 uniform float u_fade;
+uniform float u_boost;               // 小さく見える銀河を見やすくするための増光
 uniform float u_px;
 out vec3 v_col;
 void main() {
@@ -258,7 +259,7 @@ void main() {
     float px = clamp(tp, 1.0, 40.0);
     float r = min(tp, 40.0) / px;
     gl_PointSize = px * u_px;
-    v_col = a_rgb * min(a_w * u_k * r * r * u_fade, 1.2);
+    v_col = a_rgb * min(a_w * u_k * r * r * u_fade * u_boost, 1.2);
 }
 """
 
