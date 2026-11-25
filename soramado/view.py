@@ -13,6 +13,7 @@ from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from . import astro, shaders, textures
+from .stars import StarCatalog
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -29,6 +30,9 @@ GL_ONE_MINUS_SRC_ALPHA = 0x0303
 GL_ONE = 0x0001
 GL_LEQUAL = 0x0203
 GL_MULTISAMPLE = 0x809D
+GL_POINTS = 0x0000
+GL_LINES = 0x0001
+GL_PROGRAM_POINT_SIZE = 0x8642
 
 FOV_DEG = 45.0
 NEAR_AU = 1e-10
@@ -153,6 +157,7 @@ class SpaceView(QOpenGLWidget):
     targetChanged = Signal(str)
     timeChanged = Signal(float)
     statusChanged = Signal(str)
+    starSelected = Signal(int)      # 選んだ恒星の番号（-1 = 選択解除）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -169,6 +174,15 @@ class SpaceView(QOpenGLWidget):
         self.magnify = 1.0
         self.show_orbits = True
         self.show_labels = True
+
+        # 恒星
+        self.stars = StarCatalog()
+        self.show_stars = True
+        self.show_con_lines = True
+        self.show_con_names = True
+        self.show_star_names = True
+        self.limit_mag = 6.5
+        self.selected_star = -1
 
         # カメラ（注視点のまわりを回る）
         self.target = "sun"
@@ -202,6 +216,7 @@ class SpaceView(QOpenGLWidget):
         if key not in BY_KEY:
             return
         new_dist = self._default_dist(key)
+        self.selected_star = -1
         if fly:
             self._fly = {
                 "from_focus": self._focus(), "from_key": self.target, "to": key,
@@ -309,6 +324,9 @@ class SpaceView(QOpenGLWidget):
         self.p_ring = prog(shaders.RING_VS, shaders.RING_FS)
         self.p_line = prog(shaders.LINE_VS, shaders.LINE_FS)
         self.p_glow = prog(shaders.GLOW_VS, shaders.GLOW_FS)
+        self.p_star = prog(shaders.STAR_VS, shaders.STAR_FS)
+        self.m_stars = _Mesh(self.stars.vertex_data(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
+        self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
 
         self.m_sphere = _Mesh(_sphere_mesh(), [(0, 3), (1, 2)], GL_TRIANGLES)
         self.m_ring = _Mesh(_ring_mesh(), [(0, 3)], GL_TRIANGLE_STRIP)
@@ -430,6 +448,33 @@ class SpaceView(QOpenGLWidget):
 
         rel = {b.key: self.display_pos(b.key) - eye for b in BODIES}
         sun_rel = rel["sun"]
+
+        # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
+        f.glDisable(GL_DEPTH_TEST)
+        f.glEnable(GL_BLEND)
+        f.glBlendFunc(GL_ONE, GL_ONE)
+        if self.show_con_lines:
+            p = self.p_line
+            p.bind()
+            self._common(p, viewproj)
+            p.setUniformValue("u_offset", QVector3D(0, 0, 0))
+            p.setUniformValue1f("u_scale", 1000.0)
+            p.setUniformValue("u_color", QVector4D(0.10, 0.18, 0.34, 1.0))
+            self.m_conlines.draw(f)
+            p.release()
+        if self.show_stars:
+            f.glEnable(GL_PROGRAM_POINT_SIZE)
+            p = self.p_star
+            p.bind()
+            p.setUniformValue("u_viewproj", _qmat(viewproj))
+            p.setUniformValue("u_eye", QVector3D(*eye))
+            p.setUniformValue1f("u_limit", float(self.limit_mag))
+            p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
+            p.setUniformValue1f("u_gain", 1.0)
+            self.m_stars.draw(f)
+            p.release()
+        f.glDisable(GL_BLEND)
+        f.glEnable(GL_DEPTH_TEST)
 
         # ---- 天体（球）
         p = self.p_sphere
@@ -605,7 +650,74 @@ class SpaceView(QOpenGLWidget):
             painter.drawText(QPointF(x + off + 1, y - off * 0.3 + 1), b.name)
             painter.setPen(QPen(col.lighter(130) if b.key == self.target else col))
             painter.drawText(QPointF(x + off, y - off * 0.3), b.name)
+
+        self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
         painter.end()
+
+    def _sky_xy(self, direction, viewproj, w, h):
+        return self._project(direction * 1000.0, viewproj, w, h)
+
+    def _draw_sky_labels(self, painter, viewproj, w, h, placed, fm):
+        cat = self.stars
+        # 選んだ星の印
+        if self.selected_star >= 0 and self.show_stars:
+            pr = self._sky_xy(cat.dir[self.selected_star], viewproj, w, h)
+            if pr:
+                painter.setPen(QPen(QColor(120, 220, 255), 1.4))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QPointF(pr[0], pr[1]), 9, 9)
+        # 星座名
+        if self.show_con_names:
+            font = painter.font()
+            painter.setPen(QPen(QColor(80, 115, 180, 190)))
+            for c in cat.constellations:
+                pr = self._sky_xy(c.center, viewproj, w, h)
+                if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
+                    continue
+                rect = fm.boundingRect(c.name)
+                rect.moveCenter(QPointF(pr[0], pr[1]).toPoint())
+                if any(rect.intersects(r) for r in placed):
+                    continue
+                placed.append(rect)
+                painter.drawText(rect, Qt.AlignCenter, c.name)
+            painter.setFont(font)
+        # 星の名前（明るい順）
+        if self.show_star_names and self.show_stars:
+            painter.setPen(QPen(QColor(200, 200, 170, 220)))
+            for i in cat.labeled:
+                if cat.mag[i] > self.limit_mag:
+                    break
+                pr = self._sky_xy(cat.dir[i], viewproj, w, h)
+                if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
+                    continue
+                name = cat.short_name(i)
+                rect = fm.boundingRect(name).translated(int(pr[0] + 6), int(pr[1] - 4))
+                if any(rect.intersects(r) for r in placed):
+                    continue
+                placed.append(rect)
+                painter.drawText(QPointF(pr[0] + 6, pr[1] - 4), name)
+
+    def pick_star(self, x, y, radius=12.0) -> int:
+        """画面上の位置に近い、いちばん明るい星を探す。"""
+        vp = getattr(self, "_viewproj", None)
+        if vp is None or not self.show_stars:
+            return -1
+        cat = self.stars
+        n = int(np.searchsorted(cat.mag, self.limit_mag, side="right"))
+        if n == 0:
+            return -1
+        d = cat.dir[:n] * 1000.0
+        clip = d @ vp[:3, :3].T + vp[:3, 3]
+        wc = d @ vp[3, :3] + vp[3, 3]
+        ok = wc > 0
+        sx = (clip[:, 0] / np.where(ok, wc, 1) * 0.5 + 0.5) * self.width()
+        sy = (1 - (clip[:, 1] / np.where(ok, wc, 1) * 0.5 + 0.5)) * self.height()
+        dist = np.hypot(sx - x, sy - y)
+        dist[~ok] = 1e9
+        near = np.nonzero(dist < radius)[0]
+        if len(near) == 0:
+            return -1
+        return int(near[0])       # 明るい順に並んでいるので先頭が最も明るい
 
     # ---------------------------------------------------------- マウス・キー
 
@@ -644,6 +756,10 @@ class SpaceView(QOpenGLWidget):
                 best, best_d = key, dd
         if best:
             self.set_target(best)
+            return
+        self.selected_star = self.pick_star(x, y)
+        self.starSelected.emit(self.selected_star)
+        self.update()
 
     def keyPressEvent(self, e):
         k = e.key()

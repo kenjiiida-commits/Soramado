@@ -16,7 +16,7 @@ cp -r soramado "$ROOT/usr/lib/$PKG/"
 find "$ROOT/usr/lib/$PKG" -name "__pycache__" -type d -prune -exec rm -r {} +
 cp packaging/soramado.desktop "$ROOT/usr/share/applications/"
 cp soramado/soramado.svg "$ROOT/usr/share/icons/hicolor/scalable/apps/"
-cp LICENSE README.md "$ROOT/usr/share/doc/$PKG/"
+cp LICENSE README.md soramado/data/LICENSE-DATA.md "$ROOT/usr/share/doc/$PKG/"
 
 cat > "$ROOT/usr/bin/soramado" <<'SH'
 #!/bin/sh
@@ -37,6 +37,7 @@ Homepage: https://github.com/kenjiiida-commits/Soramado
 Description: Space simulator for Ubuntu (Soramado)
  そらみ窓は、太陽系を3Dで自由に旅できる宇宙シミュレーターです。
  惑星は実際の日付どおりの位置で公転し、時間の早送りや逆再生もできます。
+ 約12万個の恒星と星座線も表示します。
 CTRL
 
 cat > "$ROOT/DEBIAN/postinst" <<'SH'

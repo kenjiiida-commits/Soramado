@@ -182,3 +182,47 @@ void main() {
     frag = vec4(u_color * g, 1.0);
 }
 """
+
+# ---------------------------------------------------------------- 恒星
+STAR_VS = """#version 330 core
+layout(location=0) in vec3 a_pos;     // 太陽中心の位置 [AU]
+layout(location=1) in float a_mag;    // 地球（太陽）から見た等級
+layout(location=2) in float a_dist;   // 太陽からの距離 [AU]
+layout(location=3) in vec3 a_rgb;
+uniform vec3 u_eye;                   // カメラの位置（太陽中心）[AU]
+uniform mat4 u_viewproj;
+uniform float u_limit;                // 見える限界の等級
+uniform float u_px;                   // 画面の拡大率（高解像度画面用）
+uniform float u_gain;                 // 星の明るさの調整
+out vec3 v_col;
+void main() {
+    vec3 rel = a_pos - u_eye;
+    float d = max(length(rel), 1e-6);
+    // カメラの位置から見た等級（遠ざかれば暗く、近づけば明るく）
+    float m = a_mag + 5.0 * log(d / a_dist) / log(10.0);
+    float li = -0.4 * (m - u_limit);          // log10(明るさ / 限界の明るさ)
+    if (li < 0.0) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // 画面の外へ（描かない）
+        gl_PointSize = 0.0;
+        v_col = vec3(0.0);
+        return;
+    }
+    // 星は方向だけが大事なので、一定の距離に置いて描く
+    gl_Position = u_viewproj * vec4(rel / d * 1000.0, 1.0);
+    gl_PointSize = clamp(2.0 + 2.2 * li, 2.0, 16.0) * u_px;
+    float a = clamp(0.30 + 0.35 * li, 0.25, 1.4) * u_gain;
+    v_col = a_rgb * a;
+}
+"""
+
+STAR_FS = """#version 330 core
+in vec3 v_col;
+out vec4 frag;
+void main() {
+    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(p, p);
+    if (r2 > 1.0) discard;
+    float k = exp(-r2 * 4.0) + 0.3 * exp(-r2 * 1.2);
+    frag = vec4(v_col * k, 1.0);
+}
+"""

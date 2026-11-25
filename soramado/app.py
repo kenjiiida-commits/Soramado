@@ -37,13 +37,14 @@ HELP_TEXT = """<h3>操作方法</h3>
 <table cellpadding="3">
 <tr><td><b>左ドラッグ</b></td><td>視点を回す</td></tr>
 <tr><td><b>ホイール</b> / <b>右ドラッグ</b></td><td>近づく・離れる</td></tr>
-<tr><td><b>ダブルクリック</b></td><td>その天体へ移動する</td></tr>
+<tr><td><b>ダブルクリック</b></td><td>惑星へ移動する／恒星の情報を見る</td></tr>
 <tr><td><b>スペース</b></td><td>時間を止める・動かす</td></tr>
 <tr><td><b>+ / −</b></td><td>近づく・離れる</td></tr>
 <tr><td><b>F11</b></td><td>全画面表示</td></tr>
 </table>
 <p>「惑星の大きさ」を上げると、惑星を実際より大きく描きます（太陽は最大10倍）。
-実寸（×1）では、遠くから見ると惑星は点と名前だけになります。</p>"""
+実寸（×1）では、遠くから見ると惑星は点と名前だけになります。</p>
+<p>「星の数」で、何等星まで表示するかを変えられます。肉眼で見えるのは 6.5 等くらいまでです。</p>"""
 
 
 def _fmt_dist(au: float) -> str:
@@ -146,6 +147,22 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.lb_mag)
         tb.addWidget(box)
 
+        box2 = QWidget()
+        lay2 = QHBoxLayout(box2)
+        lay2.setContentsMargins(6, 0, 6, 0)
+        lay2.addWidget(QLabel("星の数"))
+        self.sl_stars = QSlider(Qt.Horizontal)
+        self.sl_stars.setRange(20, 100)        # 限界等級 ×10（2.0〜10.0等）
+        self.sl_stars.setValue(65)
+        self.sl_stars.setFixedWidth(120)
+        self.sl_stars.valueChanged.connect(self._on_limit)
+        lay2.addWidget(self.sl_stars)
+        self.lb_stars = QLabel()
+        self.lb_stars.setMinimumWidth(130)
+        lay2.addWidget(self.lb_stars)
+        tb.addWidget(box2)
+        self._on_limit(self.sl_stars.value())
+
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
@@ -170,6 +187,11 @@ class MainWindow(QMainWindow):
         self.act_labels.toggled.connect(self._on_toggle_labels)
         m_view.addAction(self.act_labels)
         m_view.addSeparator()
+        self.act_stars = self._toggle(m_view, "恒星", "show_stars")
+        self.act_conl = self._toggle(m_view, "星座線", "show_con_lines")
+        self.act_conn = self._toggle(m_view, "星座名", "show_con_names")
+        self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
+        m_view.addSeparator()
         act_full = QAction("全画面表示", self, checkable=True)
         act_full.setShortcut(QKeySequence("F11"))
         act_full.toggled.connect(lambda on: self.showFullScreen() if on else self.showNormal())
@@ -184,6 +206,23 @@ class MainWindow(QMainWindow):
         m_help.addAction(act_about)
 
     # ---------------------------------------------------------- 動作
+
+    def _toggle(self, menu, label, attr):
+        act = QAction(label, self, checkable=True, checked=getattr(self.view, attr))
+
+        def on(v):
+            setattr(self.view, attr, v)
+            self.view.update()
+        act.toggled.connect(on)
+        menu.addAction(act)
+        return act
+
+    def _on_limit(self, v):
+        lim = v / 10.0
+        self.view.limit_mag = lim
+        n = int(np.searchsorted(self.view.stars.mag, lim, side="right"))
+        self.lb_stars.setText(f"{lim:.1f}等まで（{n:,}個）")
+        self.view.update()
 
     def _on_toggle_orbits(self, on):
         self.view.show_orbits = on
@@ -226,6 +265,10 @@ class MainWindow(QMainWindow):
             self.dt_edit.setDateTime(QDateTime.fromSecsSinceEpoch(int(round(unix)), Qt.LocalTime))
             self.dt_edit.blockSignals(False)
 
+        if v.selected_star >= 0:
+            self.status_info.setText("★ " + v.stars.describe(v.selected_star))
+            self._refresh_warn(v)
+            return
         key = v.target
         b = BY_KEY[key]
         parts = [f"<b>{b.name}</b>", f"半径 {b.radius_km:,.0f} km"]
@@ -238,7 +281,9 @@ class MainWindow(QMainWindow):
         surface = v.dist - v.display_radius(key)
         parts.append(f"視点の距離 {_fmt_dist(max(surface, 0.0))}（表面から）")
         self.status_info.setText("　｜　".join(parts))
+        self._refresh_warn(v)
 
+    def _refresh_warn(self, v):
         if not astro.elements_valid(v.jd):
             self.status_warn.setText(f"※ {astro.VALID_FROM_YEAR}〜{astro.VALID_TO_YEAR}年の範囲外のため、惑星の位置は概算です")
         else:
@@ -316,6 +361,8 @@ class MainWindow(QMainWindow):
             "・惑星の軌道: NASA JPL「Approximate Positions of the Planets」<br>"
             "・月の位置: Paul Schlyter「How to compute planetary positions」<br>"
             "・天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）<br>"
+            "・恒星: HYG データベース v4.1（CC BY-SA 4.0）<br>"
+            "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"
             "・惑星の画像（ダウンロードした場合）: "
             "<a href='https://www.solarsystemscope.com/textures/'>Solar System Scope</a>"
             "（CC BY 4.0）</p>"
