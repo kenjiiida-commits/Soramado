@@ -492,17 +492,16 @@ class SpaceView(QOpenGLWidget):
             d = float(np.linalg.norm(c))
             fade = 1.0
             if g.kind == "milkyway":
-                # 太陽の近くでは天の川銀河の模式図は出さない（本物の星を見せる）
-                fade = _smooth(300 * LY_AU, 6000 * LY_AU, self._sun_far)
+                # 太陽系のすぐ近くでは天の川銀河の模式図は出さない（本物の星を見せる）
+                fade = _smooth(3 * LY_AU, 300 * LY_AU, self._sun_far)
             if fade <= 0.01:
                 continue
-            r_px = min(g.radius_kpc * gx.KPC_AU / max(d, 1.0) * focal, h * 0.9)
-            flux = 0.9 * max(r_px * r_px, 400.0) / g.n * fade
             # 列ベクトルが銀河の軸。kpc の局所座標を AU に直す行列
             m3 = QMatrix3x3([float(v) for v in (g.rot * gx.KPC_AU).reshape(-1)])
             p.setUniformValue("u_rot", m3)
             p.setUniformValue("u_center", QVector3D(*c))
-            p.setUniformValue1f("u_flux", float(flux))
+            p.setUniformValue1f("u_k", float(g.k))
+            p.setUniformValue1f("u_fade", float(fade))
             self.m_galaxies.draw(f, g.n, g.first)
         p.release()
 
@@ -847,7 +846,7 @@ class SpaceView(QOpenGLWidget):
                 painter.drawText(rect, Qt.AlignCenter, c.name)
             painter.setFont(font)
         # 星の名前（明るい順）
-        if self.show_star_names and self.show_stars:
+        if self.show_star_names and self.show_stars and self._sun_far < 40 * LY_AU:
             painter.setPen(QPen(QColor(200, 200, 170, 220)))
             far = self._sun_far > 3000.0
             for i in cat.labeled:

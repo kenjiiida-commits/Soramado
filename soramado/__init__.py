@@ -1,3 +1,3 @@
 """そらみ窓（Soramado）— Ubuntu 用の宇宙シミュレーター。"""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"

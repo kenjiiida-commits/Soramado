@@ -245,16 +245,20 @@ uniform mat3 u_rot;                   // 銀河の向き × (AU/kpc)
 uniform float u_kpc;                  // 1 kpc [AU]
 uniform mat4 u_viewproj;
 uniform float u_focal;                // 距離1で1単位の物が何ピクセルか
-uniform float u_flux;                 // 銀河全体の明るさ
+uniform float u_k;                    // 銀河ごとの明るさの係数（表面輝度が一定になるように決めたもの）
+uniform float u_fade;
 uniform float u_px;
 out vec3 v_col;
 void main() {
     vec3 w = u_center + u_rot * a_pos;
     float d = max(length(w), 1.0);
     gl_Position = u_viewproj * vec4(w / d * 1000.0, 1.0);
-    float px = clamp(a_size * u_kpc / d * u_focal, 1.0, 40.0);
+    // 本来の見かけの大きさ tp。1ピクセルより小さい粒子は、光の量を保ったまま暗くする
+    float tp = a_size * u_kpc / d * u_focal;
+    float px = clamp(tp, 1.0, 40.0);
+    float r = min(tp, 40.0) / px;
     gl_PointSize = px * u_px;
-    v_col = a_rgb * min(a_w * u_flux / (px * px), 1.5);
+    v_col = a_rgb * min(a_w * u_k * r * r * u_fade, 1.2);
 }
 """
 

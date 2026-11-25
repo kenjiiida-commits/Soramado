@@ -22,6 +22,7 @@ _GC_RA, _GC_DEC = 266.40500, -28.93617      # 銀河中心の方向
 _NGP_RA, _NGP_DEC = 192.85948, 27.12825     # 銀河北極の方向
 SUN_GC_KPC = 8.2                             # 太陽から銀河中心までの距離
 SUN_Z_KPC = 0.02                             # 太陽は円盤面より少し北
+SURFACE = 1.6                                # 銀河の表面の明るさ（見た目の調整用）
 
 
 def _eq_vec(ra_deg, dec_deg):
@@ -64,6 +65,7 @@ class Galaxy:
     rot: np.ndarray | None = None        # 銀河の座標軸（列ベクトル）
     first: int = 0                       # 頂点バッファの中の位置
     n: int = 0
+    k: float = 1.0                       # 明るさの係数
 
 
 GALAXIES = [
@@ -252,6 +254,8 @@ def build() -> np.ndarray:
             pos, col, size, wt = _generic(g, rng)
         data = np.concatenate([pos, size[:, None], wt[:, None], col], axis=1).astype(np.float32)
         g.first, g.n = first, len(data)
+        # 銀河をどの距離から見ても、表面の明るさがほぼ同じになるようにする
+        g.k = SURFACE / float(np.sum((size / g.radius_kpc) ** 2 * wt))
         first += len(data)
         chunks.append(data)
     return np.concatenate(chunks)
