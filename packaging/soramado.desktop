@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Soramado
+Name[ja]=そらみ窓
+GenericName=Space Simulator
+GenericName[ja]=宇宙シミュレーター
+Comment=Travel through the solar system in 3D
+Comment[ja]=太陽系を3Dで自由に旅する宇宙シミュレーター
+Exec=soramado
+Icon=soramado
+Terminal=false
+Categories=Education;Science;Astronomy;
+Keywords=space;planet;solar system;astronomy;宇宙;惑星;太陽系;天文;
+StartupWMClass=soramado
