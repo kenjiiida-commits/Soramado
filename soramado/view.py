@@ -15,6 +15,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from . import astro, shaders, textures
 from .stars import StarCatalog
 from . import galaxies as gx
+from .galaxy_catalog import GalaxyCatalog
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -37,9 +38,9 @@ GL_PROGRAM_POINT_SIZE = 0x8642
 
 FOV_DEG = 45.0
 NEAR_AU = 1e-10
-FAR_AU = 1e14
+FAR_AU = 1e16
 LOGC = astro.AU_KM            # 対数デプスは km 単位で計算する
-MAX_DIST_AU = 2e13           # 約3億光年
+MAX_DIST_AU = 1.5e14         # 約24億光年
 LY_AU = gx.LY_AU
 KM = 1.0 / astro.AU_KM
 
@@ -206,6 +207,7 @@ class SpaceView(QOpenGLWidget):
         self.limit_mag = 6.5
         self.selected_star = -1
         self.show_galaxies = True
+        self.gcat = GalaxyCatalog()
 
         # カメラ（注視点のまわりを回る）
         self.target = "sun"
@@ -236,10 +238,10 @@ class SpaceView(QOpenGLWidget):
         self.update()
 
     def is_galaxy(self, key: str) -> bool:
-        return key in gx.BY_KEY
+        return key in gx.BY_KEY or key.startswith("c:")
 
     def set_target(self, key: str, fly: bool = True):
-        if key not in BY_KEY and key not in gx.BY_KEY:
+        if key not in BY_KEY and not self.is_galaxy(key):
             return
         new_dist = self._default_dist(key)
         self.selected_star = -1
@@ -277,6 +279,14 @@ class SpaceView(QOpenGLWidget):
         """銀河へ行くときの見下ろす向き（カメラが注視点のどちら側にいるか）。"""
         if not self.is_galaxy(key):
             return None
+        if key.startswith("c:"):
+            i = int(key[2:])
+            normal = np.cross(self.gcat.major[i], self.gcat.second[i])
+            to_us = -self.gcat.center[i] / np.linalg.norm(self.gcat.center[i])
+            if np.dot(normal, to_us) < 0:
+                normal = -normal
+            v = to_us * 0.85 + normal * 0.45
+            return v / np.linalg.norm(v)
         g = gx.BY_KEY[key]
         normal = g.rot[:, 2]
         if g.kind == "milkyway":
@@ -298,6 +308,8 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- 大きさ・位置
 
     def display_radius(self, key: str) -> float:
+        if key.startswith("c:"):
+            return float(self.gcat.radius[int(key[2:])])
         if key in gx.BY_KEY:
             return gx.BY_KEY[key].radius_kpc * gx.KPC_AU
         b = BY_KEY[key]
@@ -309,6 +321,8 @@ class SpaceView(QOpenGLWidget):
         return max(1.0, self.magnify / 30.0)
 
     def display_pos(self, key: str) -> np.ndarray:
+        if key.startswith("c:"):
+            return self.gcat.center[int(key[2:])]
         if key in gx.BY_KEY:
             return gx.BY_KEY[key].center
         if key == "moon":
@@ -317,12 +331,12 @@ class SpaceView(QOpenGLWidget):
         return self.positions[key]
 
     def _min_dist(self, key):
-        if key in gx.BY_KEY:
+        if self.is_galaxy(key):
             return self.display_radius(key) * 0.05
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
-        if key in gx.BY_KEY:
+        if self.is_galaxy(key):
             return self.display_radius(key) * (2.3 if key == "g:mw" else 2.8)
         if key == "sun":
             return max(5.0, self._min_dist("sun") * 4)
@@ -400,6 +414,9 @@ class SpaceView(QOpenGLWidget):
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
         self.m_galaxies = _Mesh(gx.build(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
+        self.p_gcat = prog(shaders.GCAT_VS, shaders.GCAT_FS)
+        self.m_gcat = _Mesh(self.gcat.vertex_data(),
+                            [(0, 2), (1, 3), (2, 3), (3, 3), (4, 1), (5, 3), (6, 1), (7, 1)], GL_TRIANGLES)
 
         self.m_sphere = _Mesh(_sphere_mesh(), [(0, 3), (1, 2)], GL_TRIANGLES)
         self.m_ring = _Mesh(_ring_mesh(), [(0, 3)], GL_TRIANGLE_STRIP)
@@ -502,8 +519,9 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue("u_center", QVector3D(*c))
             # 画面上で小さい銀河は、点が重なりにくく暗く見えるので明るくする（見やすさのため）
             r_px = g.radius_kpc * gx.KPC_AU / max(d, 1.0) * focal
-            boost = min(25.0, max(1.0, (60.0 / max(r_px, 1e-3)) ** 1.2))
+            boost = min(8.0, max(1.0, (60.0 / max(r_px, 1e-3)) ** 1.2))
             p.setUniformValue1f("u_boost", float(boost))
+            p.setUniformValue1f("u_floor", float(4.0 / g.n * (1.0 - _smooth(2.0, 10.0, r_px))))
             p.setUniformValue1f("u_k", float(g.k))
             p.setUniformValue1f("u_fade", float(fade))
             self.m_galaxies.draw(f, g.n, g.first)
@@ -563,6 +581,16 @@ class SpaceView(QOpenGLWidget):
         f.glEnable(GL_PROGRAM_POINT_SIZE)
         if self.show_galaxies:
             self._draw_galaxies(f, viewproj, eye, focal, h)
+            p = self.p_gcat
+            p.bind()
+            p.setUniformValue("u_viewproj", _qmat(viewproj))
+            p.setUniformValue("u_eye", QVector3D(*eye))
+            p.setUniformValue("u_right", QVector3D(*right))
+            p.setUniformValue("u_up", QVector3D(*up))
+            p.setUniformValue1f("u_focal", float(focal))
+            p.setUniformValue1f("u_gain", 0.7)
+            self.m_gcat.draw(f)
+            p.release()
         if self.show_con_lines and self._con_fade > 0.01:
             p = self.p_line
             p.bind()
@@ -780,6 +808,7 @@ class SpaceView(QOpenGLWidget):
         if not self.show_galaxies:
             return
         eye = self._eye
+        self._draw_catalog_labels(painter, viewproj, w, h, placed, fm, focal)
         for g in gx.GALAXIES:
             c = g.center - eye
             d = float(np.linalg.norm(c))
@@ -805,6 +834,45 @@ class SpaceView(QOpenGLWidget):
             painter.drawText(rect.translated(1, 1), Qt.AlignCenter, g.name)
             painter.setPen(QPen(QColor(235, 200, 255) if g.key == self.target else QColor(200, 170, 235)))
             painter.drawText(rect, Qt.AlignCenter, g.name)
+
+    def _catalog_screen(self, viewproj, w, h):
+        """カタログの銀河の画面上の位置 (x, y, 見かけの半径px, 見えているか)。"""
+        rel = self.gcat.center - self._eye
+        d = np.maximum(np.linalg.norm(rel, axis=1), 1.0)
+        clip = rel @ viewproj[:3, :3].T + viewproj[:3, 3]
+        wc = rel @ viewproj[3, :3] + viewproj[3, 3]
+        ok = wc > 0
+        wc = np.where(ok, wc, 1.0)
+        x = (clip[:, 0] / wc * 0.5 + 0.5) * w
+        y = (1 - (clip[:, 1] / wc * 0.5 + 0.5)) * h
+        focal = h / (2 * math.tan(math.radians(FOV_DEG) / 2))
+        return x, y, self.gcat.radius / d * focal, ok & (x > 0) & (x < w) & (y > 0) & (y < h)
+
+    def _draw_catalog_labels(self, painter, viewproj, w, h, placed, fm, focal):
+        x, y, rpx, vis = self._catalog_screen(viewproj, w, h)
+        # 見かけの大きい順に、メシエ番号か通称のある銀河・大きく見える銀河に名前を付ける
+        cand = np.nonzero(vis & ((rpx > 25) | ((self.gcat.messier != "") & (rpx > 2))
+                                 | ((self.gcat.common != "") & (rpx > 6))))[0]
+        cand = cand[np.argsort(-rpx[cand])][:40]
+        painter.setPen(QPen(QColor(185, 160, 220)))
+        for i in cand:
+            name = self.gcat.label(int(i))
+            rect = fm.boundingRect(name)
+            rect.moveCenter(QPointF(x[i], y[i] + min(rpx[i], h * 0.3) * 0.6 + 12).toPoint())
+            if any(rect.intersects(r) for r in placed):
+                continue
+            placed.append(rect)
+            painter.drawText(rect, Qt.AlignCenter, name)
+
+    def pick_catalog_galaxy(self, px, py) -> int:
+        if not self.show_galaxies or getattr(self, "_viewproj", None) is None:
+            return -1
+        x, y, rpx, vis = self._catalog_screen(self._viewproj, self.width(), self.height())
+        dist = np.hypot(x - px, y - py)
+        hit = np.nonzero(vis & (dist < np.maximum(rpx, 10.0)))[0]
+        if len(hit) == 0:
+            return -1
+        return int(hit[np.argmax(rpx[hit])])
 
     def _draw_scale(self, painter, w, h):
         """画面の横幅がどれくらいの長さかを左下に出す。"""
@@ -936,7 +1004,13 @@ class SpaceView(QOpenGLWidget):
         if best:
             self.set_target(best)
             return
-        self.selected_star = self.pick_star(x, y)
+        star = self.pick_star(x, y)
+        if star < 0:
+            gi = self.pick_catalog_galaxy(x, y)
+            if gi >= 0:
+                self.set_target(f"c:{gi}")
+                return
+        self.selected_star = star
         self.starSelected.emit(self.selected_star)
         self.update()
 

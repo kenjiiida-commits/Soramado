@@ -248,6 +248,7 @@ uniform float u_focal;                // 距離1で1単位の物が何ピクセ�
 uniform float u_k;                    // 銀河ごとの明るさの係数（表面輝度が一定になるように決めたもの）
 uniform float u_fade;
 uniform float u_boost;               // 小さく見える銀河を見やすくするための増光
+uniform float u_floor;               // 銀河全体が数ピクセルしかないときの最低限の明るさ
 uniform float u_px;
 out vec3 v_col;
 void main() {
@@ -259,7 +260,7 @@ void main() {
     float px = clamp(tp, 1.0, 40.0);
     float r = min(tp, 40.0) / px;
     gl_PointSize = px * u_px;
-    v_col = a_rgb * min(a_w * u_k * r * r * u_fade * u_boost, 1.2);
+    v_col = a_rgb * max(min(a_w * u_k * r * r * u_fade * u_boost, 1.2), a_w * u_floor * u_fade);
 }
 """
 
@@ -271,5 +272,75 @@ void main() {
     float r2 = dot(p, p);
     if (r2 > 1.0) discard;
     frag = vec4(v_col * exp(-r2 * 3.0), 1.0);
+}
+"""
+
+# ---------------------------------------------------------------- 銀河カタログ（四角形で描く）
+GCAT_VS = """#version 330 core
+layout(location=0) in vec2 a_corner;
+layout(location=1) in vec3 a_center;  // 太陽中心 [AU]
+layout(location=2) in vec3 a_ax1;     // 長軸方向 × 半径 [AU]
+layout(location=3) in vec3 a_ax2;     // 円盤内のもう一つの軸 × 半径 [AU]
+layout(location=4) in float a_mode;   // 0渦巻 1レンズ状 2中心のふくらみ 3楕円 4不規則
+layout(location=5) in vec3 a_rgb;
+layout(location=6) in float a_seed;
+layout(location=7) in float a_flat;
+uniform vec3 u_eye;
+uniform mat4 u_viewproj;
+uniform vec3 u_right;
+uniform vec3 u_up;
+uniform float u_focal;
+uniform float u_gain;
+out vec2 v_uv;
+out vec3 v_col;
+flat out int v_mode;
+out float v_seed;
+void main() {
+    vec3 c = a_center - u_eye;
+    float d = max(length(c), 1.0);
+    float R = length(a_ax1);
+    float rpx = R / d * u_focal;
+    // 小さすぎて見えない銀河は、少し大きく描いて暗くする（光の点として見えるように）
+    float s = max(1.0, 2.5 / max(rpx, 1e-6));
+    vec3 off;
+    int mode = int(a_mode + 0.5);
+    if (mode == 2 || mode == 3) {
+        off = (a_corner.x * u_right + a_corner.y * u_up * a_flat) * R;
+    } else {
+        off = a_corner.x * a_ax1 + a_corner.y * a_ax2;
+    }
+    gl_Position = u_viewproj * vec4(c + off * s, 1.0);
+    v_uv = a_corner;
+    v_mode = mode;
+    v_seed = a_seed;
+    v_col = a_rgb * u_gain * max(pow(s, -0.9), 0.8);
+}
+"""
+
+GCAT_FS = """#version 330 core
+in vec2 v_uv;
+in vec3 v_col;
+flat in int v_mode;
+in float v_seed;
+out vec4 frag;
+void main() {
+    float r = length(v_uv);
+    if (r > 1.4) discard;
+    float edge = smoothstep(1.4, 0.9, r);
+    float val;
+    if (v_mode == 0) {
+        float th = atan(v_uv.y, v_uv.x);
+        float arms = pow(0.5 + 0.5 * cos(2.0 * th - log(r + 0.03) * 4.5 + v_seed), 2.0);
+        val = exp(-r * 3.0) * (0.25 + 1.1 * arms);
+    } else if (v_mode == 1) {
+        val = exp(-r * 3.5);
+    } else if (v_mode == 4) {
+        val = exp(-r * 2.2) * (0.7 + 0.3 * sin(v_uv.x * 7.0 + v_seed) * sin(v_uv.y * 5.0 + v_seed * 1.3));
+    } else if (v_mode == 2) {
+        val = exp(-r * r * 10.0) * 0.9;
+    } else {
+        val = exp(-r * r * 4.0);
+    }
+    frag = vec4(v_col * val * edge, 1.0);
 }
 """

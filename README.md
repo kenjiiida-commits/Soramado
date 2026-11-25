@@ -16,8 +16,9 @@ Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
 - 約12万個の恒星を、本当の明るさと色で表示（v0.2）。「星の数」で何等星まで出すかを調整
 - 星座線・日本語の星座名・おもな星の名前（シリウス、ベテルギウスなど）
 - 恒星をダブルクリックすると、名前・明るさ・距離（光年）・スペクトル型を表示
-- ホイールでどこまでも引いていける（v0.3）：太陽系 → 近くの恒星 → 天の川銀河 → 近くの銀河（約3億光年まで）。左下に画面の横幅（km・AU・光年）を表示
+- ホイールでどこまでも引いていける（v0.3）：太陽系 → 近くの恒星 → 天の川銀河 → 近くの銀河（約24億光年まで）。左下に画面の横幅（km・AU・光年）を表示
 - 天の川銀河と近くの銀河12個（アンドロメダ銀河、大・小マゼラン雲、M81、ソンブレロ銀河、M87 など）。「見る天体」から選ぶと飛んでいける
+- 実在の銀河 約1万個（OpenNGC）を、本当の方向・距離・大きさ・向きで配置。数億光年まで引くと、おとめ座銀河団などの銀河の集まりが見える。ダブルクリックで飛んでいける
 
 ## 動作環境
 
@@ -64,6 +65,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 月の位置は簡易式で、誤差は 0.05度程度です。
 - 恒星の方向は HYG データベースの J2000 の位置で、固有運動は計算していません（`tests/test_stars.py`）。
 - 銀河の位置（赤経・赤緯）・距離・大きさ・傾きは文献のおおよその値です。銀河の形は写真ではなく、粒子で作った模式図です。天の川銀河は、太陽から中心まで 8.2 kpc（約2.7万光年）、4本の渦巻き腕と棒状構造をもつ形にしています。
+- 約1万個の銀河の距離は、後退速度からハッブルの法則（H0 = 70 km/s/Mpc）で求めた推定値です（おとめ座銀河団の方向の近い銀河は 16.5 Mpc に置いています）。
 
 ## 今後の予定
 
@@ -76,6 +78,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 月の位置: Paul Schlyter, *How to compute planetary positions*
 - 天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）
 - 恒星: [HYG データベース v4.1](https://github.com/astronexus/HYG-Database)（CC BY-SA 4.0）。変換したデータ `soramado/data/stars.npz` も CC BY-SA 4.0 です
+- 銀河カタログ: [OpenNGC](https://github.com/mattiaverga/OpenNGC)（CC BY-SA 4.0）。変換したデータ `soramado/data/galaxies.npz` も CC BY-SA 4.0 です
 - 星座線・星座名: [d3-celestial](https://github.com/ofrohn/d3-celestial)（© 2015 Olaf Frohn、BSD 3-Clause）
 - データのライセンスの詳細は `soramado/data/LICENSE-DATA.md` を見てください
 - 惑星の画像（ダウンロードした場合）: [Solar System Scope](https://www.solarsystemscope.com/textures/)（CC BY 4.0）。画像はソフトに同梱しておらず、`~/.local/share/soramado/textures/` に保存されます。

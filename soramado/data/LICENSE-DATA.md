@@ -14,6 +14,17 @@ HYG データベース v4.1（David Nash / Astronexus）を、そらみ窓で使
 変換に使ったプログラムは `tools/make_star_data.py` です。
 この変換後のデータも CC BY-SA 4.0 で提供します。
 
+## galaxies.npz — 銀河カタログ
+
+OpenNGC（Mattia Verga）の NGC/IC カタログから、後退速度のある銀河 約1万個を取り出したものです。
+<https://github.com/mattiaverga/OpenNGC>
+
+ライセンス: Creative Commons Attribution-ShareAlike 4.0 International（CC BY-SA 4.0）
+
+変換の内容: 銀河だけを取り出し、後退速度からハッブルの法則（H0 = 70 km/s/Mpc）で距離を求めた
+（おとめ座銀河団の方向の近い銀河は 16.5 Mpc に置いた）。変換に使ったプログラムは
+`tools/make_galaxy_data.py` です。この変換後のデータも CC BY-SA 4.0 で提供します。
+
 ## constellations.json — 星座線・星座名
 
 d3-celestial（Olaf Frohn）の星座データ（constellations.json, constellations.lines.json）から作りました。

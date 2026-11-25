@@ -256,6 +256,8 @@ class MainWindow(QMainWindow):
         i = self.cb_target.findData(key)
         if i >= 0:
             self.cb_target.setCurrentIndex(i)
+        else:
+            self.cb_target.setCurrentIndex(-1)
 
     def _on_date_edited(self):
         dt = self.dt_edit.dateTime().toUTC()
@@ -276,6 +278,11 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         key = v.target
+        if key.startswith("c:"):
+            self.status_info.setText(v.gcat.describe(int(key[2:])) + "　｜　視点の距離 "
+                                     + format_length(v.dist))
+            self._refresh_warn(v)
+            return
         if key in gx.BY_KEY:
             self.status_info.setText(gx.describe(gx.BY_KEY[key]) + "　｜　視点の距離 "
                                      + format_length(v.dist))
@@ -375,6 +382,7 @@ class MainWindow(QMainWindow):
             "・恒星: HYG データベース v4.1（CC BY-SA 4.0）<br>"
             "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"
             "・銀河: 位置・距離・大きさは文献のおおよその値。形は粒子で作った模式図<br>"
+            "・銀河カタログ（約1万個）: OpenNGC（CC BY-SA 4.0）。距離は後退速度から推定<br>"
             "・惑星の画像（ダウンロードした場合）: "
             "<a href='https://www.solarsystemscope.com/textures/'>Solar System Scope</a>"
             "（CC BY 4.0）</p>"
