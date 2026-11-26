@@ -24,6 +24,7 @@ Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
 - ツアー（v0.7）：「ツアー」メニューから、字幕つきで自動的に案内。「太陽系めぐり」「宇宙の大きさ」（地球から約12億光年まで）「今夜の星空」（観測地でその日の夜9時に見える惑星を自動で選んで案内）
 - 画像・動画の保存（v0.10）：Ctrl+S で今の画面を画像（ピクチャ/Soramado）に、「⏺ 録画」ボタンか Ctrl+R で動画（ビデオ/Soramado、MP4）に保存。録画中は1コマずつ描くので、パソコンが遅くても動画はなめらか。「ツアー」→「ツアーを動画にする」で、ツアー全体を1本の動画にできる（ffmpeg が必要: `sudo apt install ffmpeg`）
 - たくさんの小惑星・彗星（v1.1）：「ファイル」メニューから NASA JPL の軌道要素の表（番号付き小惑星 約80万個・彗星 約4千個）をダウンロードして表示。位置はグラフィックの側で計算するのでなめらか。地球に近い小惑星・小惑星帯・ヒルダ群・木星のトロヤ群・ケンタウルス族・太陽系外縁天体・彗星を色分け。点をダブルクリックすると名前と軌道、Ctrl+F で名前や番号から探して飛んでいける。ツアー「小惑星の世界」（v1.2）
+- 人工衛星（v1.12）：CelesTrak の軌道要素（TLE）をダウンロードして、ISS・天宮・ハッブル宇宙望遠鏡などを地球のまわりに表示（PyEphem の SGP4 で計算）。観測地で見える時刻の一覧と、地上モードで空を横切る様子
 - 天王星・海王星の環と衛星（v1.11）：天王星の細く暗い環（ε環など）と海王星の環（アダムズ環など）、天王星の衛星12個・海王星の衛星9個を追加（JPL Horizons の軌道要素）
 - 星座の解説（v1.10）：星座の名前をダブルクリックすると、線が明るくなり、88星座すべての見ごろ・見つけ方・神話や由来・おもな星を表示。Ctrl+F で星座や星雲・星団も名前から探せる
 - 流星群と惑星の接近（v1.8）：「天文現象」メニューに、流星群（主な11個。極大・見やすい時刻・見える数の目安・月明かり）と、惑星・月の接近・衝・最大離角の一覧。地上モードでは活動中の流星群の放射点を示し、流星が流れる（実際の約10倍）
@@ -114,6 +115,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 衛星の位置: [PyEphem](https://rhodesmill.org/pyephem/)（MIT ライセンス、別途インストール）、トリトンと追加した小さな衛星は [NASA JPL Horizons](https://ssd.jpl.nasa.gov/horizons/) の軌道要素
 - 恒星: [HYG データベース v4.1](https://github.com/astronexus/HYG-Database)（CC BY-SA 4.0）。変換したデータ `soramado/data/stars.npz` も CC BY-SA 4.0 です
 - 銀河カタログ: [OpenNGC](https://github.com/mattiaverga/OpenNGC)（CC BY-SA 4.0）。変換したデータ `soramado/data/galaxies.npz` も CC BY-SA 4.0 です
+- 人工衛星（ダウンロードした場合）: [CelesTrak](https://celestrak.org/) の軌道要素（stations・visual のグループ）
 - 系外惑星（ダウンロードした場合）: [NASA Exoplanet Archive](https://exoplanetarchive.ipac.caltech.edu/)（Planetary Systems Composite Parameters）。This research has made use of the NASA Exoplanet Archive, which is operated by the California Institute of Technology, under contract with the National Aeronautics and Space Administration under the Exoplanet Exploration Program.
 - 小惑星・彗星（ダウンロードした場合）: NASA JPL Solar System Dynamics の軌道要素の表（[ELEMENTS.NUMBR](https://ssd.jpl.nasa.gov/dat/ELEMENTS.NUMBR.gz)、[ELEMENTS.COMET](https://ssd.jpl.nasa.gov/dat/ELEMENTS.COMET)）。データはソフトに同梱せず `~/.local/share/soramado/` に保存します
 - クエーサー（ダウンロードした場合）: SDSS DR16Q（Lyke et al. 2020, ApJS 250, 8）。[VizieR](https://vizier.cds.unistra.fr/) のカタログ VII/289 から取得。データはソフトに同梱せず `~/.local/share/soramado/` に保存します

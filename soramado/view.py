@@ -26,6 +26,7 @@ from . import exoplanets as exo
 from . import eclipses
 from . import nebulae as neb
 from . import events as ev
+from . import artsat
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -231,6 +232,8 @@ class SpaceView(QOpenGLWidget):
         self._sunlight_sky = 1.0
         self.show_nebulae = True
         self.show_meteors = True
+        self.show_artsat = True
+        self.artsats = artsat.load()     # 人工衛星（TLE をダウンロードしたとき）
         self._meteors = []           # いま流れている流星
         self._meteor_live = False
         self._meteor_rng = np.random.default_rng()
@@ -313,8 +316,20 @@ class SpaceView(QOpenGLWidget):
         except ValueError:
             return False
 
+    def is_artsat(self, key: str) -> bool:
+        if not key.startswith("s:"):
+            return False
+        try:
+            return 0 <= int(key[2:]) < len(self.artsats)
+        except ValueError:
+            return False
+
+    def reload_artsats(self):
+        self.artsats = artsat.load()
+        self.update()
+
     def valid_key(self, key: str) -> bool:
-        return (self.is_neb(key) or key in BY_KEY or self.is_galaxy(key) or key in crafts.BY_KEY or self.is_minor(key)
+        return (self.is_artsat(key) or self.is_neb(key) or key in BY_KEY or self.is_galaxy(key) or key in crafts.BY_KEY or self.is_minor(key)
                 or self.is_exo(key))
 
     def is_galaxy(self, key: str) -> bool:
@@ -467,6 +482,8 @@ class SpaceView(QOpenGLWidget):
     def display_radius(self, key: str) -> float:
         if key in crafts.BY_KEY:
             return 1e-10
+        if key.startswith("s:"):
+            return 0.06 * KM
         if key.startswith("n:"):
             return neb.NEBULAE[int(key[2:])].radius_au
         if key.startswith("x:"):
@@ -519,6 +536,8 @@ class SpaceView(QOpenGLWidget):
     def display_pos(self, key: str) -> np.ndarray:
         if key in crafts.BY_KEY:
             return self.craft_pos(key)
+        if key.startswith("s:"):
+            return self.positions["earth"] + artsat.offset(self.artsats[int(key[2:])], self.jd)
         if key.startswith("n:"):
             return neb.NEBULAE[int(key[2:])].pos
         if key.startswith("x:"):
@@ -544,6 +563,8 @@ class SpaceView(QOpenGLWidget):
     def _min_dist(self, key):
         if key in crafts.BY_KEY:
             return 1e-6
+        if key.startswith("s:"):
+            return 1e-8
         if key.startswith("n:"):
             return self.display_radius(key) * 0.3
         if key.startswith("x:"):
@@ -557,6 +578,8 @@ class SpaceView(QOpenGLWidget):
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
+        if key.startswith("s:"):
+            return 2.5e-5                 # 約3700 km 離れて、地球の丸みと一緒に見る
         if key.startswith("n:"):
             return self.display_radius(key) * 3.2
         if key.startswith("x:") and self.exo is not None:
@@ -1641,6 +1664,7 @@ class SpaceView(QOpenGLWidget):
         self._draw_exo_markers(painter, viewproj, w, h, placed, fm)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
         self._draw_meteors(painter, viewproj, w, h, placed, fm)
+        self._draw_artsats(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
         painter.end()
 
@@ -1828,6 +1852,81 @@ class SpaceView(QOpenGLWidget):
         width_au = 2 * self.dist * math.tan(math.radians(self._fov) / 2) * w / h
         painter.setPen(QPen(QColor(170, 180, 200)))
         painter.drawText(QPointF(12, h - 12), "画面の横幅 約 " + format_length(width_au))
+
+    def _draw_artsats(self, painter, viewproj, w, h, placed, fm):
+        """人工衛星（宇宙から見るときは地球のまわりに、地上から見るときは空に）。"""
+        if not self.artsats or not self.show_artsat:
+            return
+        earth = self.positions["earth"]
+        eye = self._eye
+        if self.ground:
+            dark = self._night > 0.5
+            off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+            for i, s in enumerate(self.artsats):
+                alt, az, lit = artsat.topo(s, self.jd, self.lat, self.lon)
+                if alt <= 0:
+                    continue
+                a, z = math.radians(alt), math.radians(az)
+                d = zen * math.sin(a) + (north * math.cos(z) + east * math.sin(z)) * math.cos(a)
+                pr = self._sky_xy(d, viewproj, w, h)
+                if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
+                    continue
+                bright = lit and dark
+                if not bright and not s.featured:
+                    continue
+                col = QColor(255, 255, 240) if bright else QColor(150, 150, 150, 160)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(col)
+                rr = 3.2 if (bright and s.featured) else 2.0
+                painter.drawEllipse(QPointF(pr[0], pr[1]), rr, rr)
+                self._screen[f"s:{i}"] = (pr[0], pr[1], 8.0)
+                if s.featured:
+                    painter.setPen(QPen(QColor(150, 230, 255) if bright else QColor(140, 150, 160)))
+                    txt = s.ja + ("" if bright else "（影の中・明るい空で見えない）")
+                    painter.drawText(QPointF(pr[0] + 8, pr[1] - 6), txt)
+            return
+        # 宇宙から：地球の近く（約60万km以内）にいるときだけ
+        if np.linalg.norm(eye - earth) > 0.004:
+            return
+        er = self.display_radius("earth")
+        tgt = int(self.target[2:]) if self.is_artsat(self.target) else -1
+        if tgt >= 0:
+            # 選んでいる衛星の軌道（1周ぶん）
+            pts = artsat.orbit_path(self.artsats[tgt], self.jd, 90)
+            prev = None
+            painter.setPen(QPen(QColor(120, 220, 255, 150), 1.2))
+            for o in pts:
+                q = self._project(earth + o - eye, viewproj, w, h)
+                if q and prev and not self._behind_earth(earth + o, earth, er):
+                    painter.drawLine(QPointF(prev[0], prev[1]), QPointF(q[0], q[1]))
+                prev = q if (q and not self._behind_earth(earth + o, earth, er)) else None
+        for i, s in enumerate(self.artsats):
+            pos = earth + artsat.offset(s, self.jd)
+            if self._behind_earth(pos, earth, er):
+                continue
+            pr = self._project(pos - eye, viewproj, w, h)
+            if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
+                continue
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(255, 255, 255) if s.featured else QColor(170, 170, 190))
+            painter.drawEllipse(QPointF(pr[0], pr[1]), 3.0 if s.featured else 1.8, 3.0 if s.featured else 1.8)
+            if s.featured:
+                self._screen[f"s:{i}"] = (pr[0], pr[1], 8.0)
+                painter.setPen(QPen(QColor(150, 230, 255)))
+                painter.drawText(QPointF(pr[0] + 8, pr[1] - 6), s.ja)
+
+    def _behind_earth(self, pos, earth, er) -> bool:
+        """カメラから見て、その点が地球の向こう側にかくれているか。"""
+        eye = self._eye
+        d = pos - eye
+        L = float(np.linalg.norm(d))
+        if L <= 0:
+            return False
+        u = d / L
+        t = float(np.dot(earth - eye, u))
+        if t <= 0 or t >= L:
+            return False
+        return float(np.linalg.norm(eye + u * t - earth)) < er
 
     METEOR_BOOST = 10.0       # 流れる数は実際の何倍に増やして見せるか
 

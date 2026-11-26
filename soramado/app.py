@@ -30,6 +30,7 @@ from . import exoplanets as exo
 from . import eclipses
 from . import nebulae as neb
 from . import events as evt
+from . import artsat
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -302,6 +303,9 @@ class MainWindow(QMainWindow):
         act_mpf = QAction("小惑星・彗星のデータを手元のファイルから読み込む…", self)
         act_mpf.triggered.connect(self._load_minor_files)
         m_file.addAction(act_mpf)
+        act_tle = QAction("人工衛星のデータ（ISS など）をダウンロード…", self)
+        act_tle.triggered.connect(self._download_tle)
+        m_file.addAction(act_tle)
         act_exo = QAction("系外惑星のデータをダウンロード…", self)
         act_exo.triggered.connect(lambda: self._download_exo(None))
         m_file.addAction(act_exo)
@@ -355,11 +359,15 @@ class MainWindow(QMainWindow):
         act_met = QAction("流星群…", self)
         act_met.triggered.connect(self._show_showers)
         m_ev.addAction(act_met)
+        act_iss = QAction("人工衛星（ISS など）が見える時刻…", self)
+        act_iss.triggered.connect(self._show_passes)
+        m_ev.addAction(act_iss)
         act_conj = QAction("惑星・月の接近と見ごろ…", self)
         act_conj.triggered.connect(self._show_events)
         m_ev.addAction(act_conj)
         m_ev.addSeparator()
         self.act_meteor = self._toggle(m_ev, "地上モードで流星を流す", "show_meteors")
+        self.act_artsat = self._toggle(m_ev, "人工衛星を表示する", "show_artsat")
 
         m_tour = mb.addMenu("ツアー(&T)")
         for tid, title, _fn in tours.TOURS:
@@ -395,7 +403,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat")
 
     def _restore_settings(self):
         st = self.settings
@@ -408,7 +416,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
@@ -691,6 +699,13 @@ class MainWindow(QMainWindow):
                         it = QListWidgetItem(f"{c.name}　（星座）")
                         it.setData(Qt.UserRole, f"con:{i}")
                         lst.addItem(it)
+                for i, sa in enumerate(self.view.artsats):
+                    if t in sa.ja or tl in sa.name.lower():
+                        it = QListWidgetItem(f"{sa.ja}　（人工衛星）")
+                        it.setData(Qt.UserRole, f"s:{i}")
+                        lst.addItem(it)
+                        if lst.count() > 40:
+                            break
                 for i, n in enumerate(neb.NEBULAE):
                     mname = f"m{n.m}" if n.m else ""
                     if t in n.name or tl == mname or tl.replace(" ", "") == n.id.lower():
@@ -946,6 +961,93 @@ class MainWindow(QMainWindow):
             "「地上から見る」で、見やすい時刻の空に流星が流れます（流れる数は実際の約10倍に増やしています）。",
             go)
 
+    def _download_tle(self, then=None):
+        if getattr(self, "_tle_dl", None):
+            return
+        dl = artsat.TleDownloader()
+        dlg = QProgressDialog("人工衛星のデータをダウンロードしています…", None, 0, 0, self)
+        dlg.setWindowTitle("人工衛星のデータ")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        timer = QTimer(self)
+
+        def poll():
+            if not dl.done:
+                return
+            timer.stop()
+            dlg.close()
+            self._tle_dl = None
+            if dl.ok:
+                self.view.reload_artsats()
+                QMessageBox.information(self, "人工衛星のデータ",
+                                        f"{dl.count} 個の人工衛星の軌道を読み込みました（CelesTrak）。\n\n"
+                                        "地球に近づくと、国際宇宙ステーションなどが地球のまわりを回ります。"
+                                        "地上モードでは、空を横切る衛星が見えます。\n"
+                                        "軌道のデータは数日で古くなるので、ときどきダウンロードし直してください。")
+                if then:
+                    then()
+            else:
+                QMessageBox.warning(self, "人工衛星のデータ", "ダウンロードできませんでした。\n\n" + dl.message)
+
+        timer.timeout.connect(poll)
+        self._tle_dl = (dl, timer, dlg)
+        dl.start()
+        timer.start(200)
+
+    def _show_passes(self):
+        v = self.view
+        if not artsat.available():
+            QMessageBox.warning(self, "人工衛星", "PyEphem（python3-ephem）が必要です。")
+            return
+        if not v.artsats:
+            ans = QMessageBox.question(self, "人工衛星", "人工衛星のデータ（CelesTrak の軌道要素、数十KB）を"
+                                       "ダウンロードしますか？")
+            if ans == QMessageBox.Yes:
+                self._download_tle(then=self._show_passes)
+            return
+        jd = astro.jd_now()
+        age = artsat.tle_age_days(v.artsats, jd)
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            ps = []
+            for s in v.artsats:
+                if s.featured:
+                    ps += artsat.passes(s, v.lat, v.lon, jd - 0.02, 10)
+        finally:
+            QApplication.restoreOverrideCursor()
+        ps.sort(key=lambda p: p.rise_jd)
+        dirs = ["北", "北北東", "北東", "東北東", "東", "東南東", "南東", "南南東",
+                "南", "南南西", "南西", "西南西", "西", "西北西", "北西", "北北西"]
+
+        def d(az):
+            return dirs[int((az + 11.25) // 22.5) % 16]
+
+        rows = []
+        for p in ps:
+            cells = [self._local_time(p.rise_jd), p.sat.ja,
+                     f"{d(p.rise_az)} → 最大 {p.max_alt:.0f}°（{d(p.max_az)}・{self._local_time(p.max_jd, False)}）"
+                     f" → {d(p.set_az)}",
+                     "見える（夜空で太陽の光を反射）" if p.visible else "見えない（昼間か、地球の影の中）"]
+            rows.append((cells, p.visible, p))
+
+        def go(p):
+            self._ground_at(p.max_jd - 1.5 / 1440)
+            a, z = math.radians(p.max_alt), math.radians(p.max_az)
+            off, zen, north, east = astro.observer_frame(v.jd, v.lat, v.lon)
+            v.look_dir(zen * math.sin(a) + (north * math.cos(z) + east * math.sin(z)) * math.cos(a), fov=110.0)
+            self.cb_speed.setCurrentIndex(0)      # 実時間で動かす
+            self._apply_speed()
+            v.paused = False
+            self._refresh_ui()
+
+        note = ("高度10°より高く昇るときの一覧です（これから10日）。「見える」は、空が暗く、衛星に太陽の光が当たっているときで、"
+                "明るい星のような光がゆっくり空を横切ります。「地上から見る」で、そのときの空を実時間で見られます。")
+        if age > 7:
+            note = f"⚠ 軌道のデータが {age:.0f} 日前のもので古くなっています。「ファイル」からダウンロードし直してください。\n" + note
+        self._event_table(f"人工衛星が見える時刻（これから10日・観測地 {v.place}）",
+                          ["昇る時刻", "衛星", "動き（方角）", "見え方"], rows, note, go)
+
     def _show_events(self):
         if not evt.available():
             QMessageBox.warning(self, "惑星・月の接近", "PyEphem（python3-ephem）が必要です。")
@@ -1096,6 +1198,15 @@ class MainWindow(QMainWindow):
                     mark = "✔ " if jd_e <= v.jd else ""
                     html.append(f"<li>{mark}{d.year}年{d.month}月{d.day}日　{txt}</li>")
                 html.append("</ul><p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
+            elif v.is_artsat(t):
+                sa = v.artsats[int(t[2:])]
+                html.append(f"<h2>{sa.ja}</h2>")
+                html.append(f"<p>高度 約{artsat.height_km(sa, v.jd):,.0f} km<br>地球を1周 約{1440 / sa.rev_per_day:.0f} 分"
+                            f"<br>1日に {sa.rev_per_day:.1f} 周</p>")
+                html.append(f"<p>{sa.note}</p>")
+                age = v.jd - sa.epoch_jd
+                html.append(f"<p style='color:#888'>位置は CelesTrak の軌道要素（{abs(age):.0f}日{'前' if age >= 0 else '後'}"
+                            "のもの）から計算しています。データが古くなるほど、位置はずれていきます。</p>")
             elif v.is_neb(t):
                 n = neb.NEBULAE[int(t[2:])]
                 html.append(f"<h2>{n.name}</h2>")
@@ -1395,6 +1506,13 @@ class MainWindow(QMainWindow):
                           f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}",
                           f"最近のできごと: {crafts.last_event(sc, v.jd)}"]
             parts.append("※ 航路はおおよそ")
+            self.status_info.setText("　｜　".join(parts))
+            self._refresh_warn(v)
+            return
+        if v.is_artsat(key):
+            sa = v.artsats[int(key[2:])]
+            parts = [f"<b>{sa.ja}</b>", f"高度 約{artsat.height_km(sa, v.jd):,.0f} km",
+                     f"1周 約{1440 / sa.rev_per_day:.0f} 分", f"視点の距離 {_fmt_dist(v.dist)}"]
             self.status_info.setText("　｜　".join(parts))
             self._refresh_warn(v)
             return
