@@ -1661,7 +1661,10 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         if key in gx.BY_KEY:
-            self._set_status(gx.describe(gx.BY_KEY[key]) + tr("　｜　視点の距離 ")
+            desc = gx.describe(gx.BY_KEY[key])
+            if v.has_photo(key) and v.show_photos:
+                desc = desc.replace("※ 形は模式図", "写真（DSS2）と模式図")
+            self._set_status(desc + tr("　｜　視点の距離 ")
                                      + format_length(v.dist))
             self._refresh_warn(v)
             return

@@ -184,7 +184,7 @@ _PHRASES = [
     ("散開星団", "Open cluster"), ("球状星団", "Globular cluster"), ("散光星雲（輝線星雲）", "Emission nebula"),
     ("反射星雲", "Reflection nebula"), ("惑星状星雲", "Planetary nebula"), ("超新星残がい", "Supernova remnant"),
     ("渦巻銀河", "Spiral galaxy"), ("楕円銀河", "Elliptical galaxy"), ("不規則銀河", "Irregular galaxy"),
-    ("※ 形は模式図", "* schematic"), ("※ 位置はおおよそ", "* approximate"), ("※ 航路はおおよそ", "* approximate"),
+    ("写真（DSS2）と模式図", "Photo (DSS2) and model"), ("※ 形は模式図", "* schematic"), ("※ 位置はおおよそ", "* approximate"), ("※ 航路はおおよそ", "* approximate"),
     ("見ている方向", "Looking"), ("方位", "Az"), ("高度", "Alt"), ("視野", "FOV"),
     ("時間", " h"), ("日", " d"), ("年", " yr"), ("分", " min"),
     ("約", "≈"), ("｜", "|"), ("　", " "), ("、", ", "), ("（", " ("), ("）", ")"), ("・", "/"),
