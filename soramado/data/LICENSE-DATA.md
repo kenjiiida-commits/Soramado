@@ -70,3 +70,14 @@ CDS（<https://alasky.cds.unistra.fr/DSS/DSSColor>）が配信している HiPS�
 - HiPS: CDS（ストラスブール天文データセンター）, T. Boch
 - This work has made use of data from the European Space Agency (ESA) mission Gaia
   (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC).
+
+## spacecraft_paths.npz — 探査機の航路
+
+NASA/JPL の Horizons（<https://ssd.jpl.nasa.gov/horizons/>）の探査機の位置（太陽中心・黄道座標 J2000）を、
+1〜5日おきに取り出したもの。将来の部分は、各ミッションが公表している予定の軌道です。
+Horizons の出力は米国政府（NASA/JPL）の公開データです。
+
+変換の内容: そらみ窓の惑星・小惑星・彗星の位置は簡単な式で計算しているので、JPL の正確な位置と少しずれる。
+探査機が天体の近くにいるあいだは、そのずれのぶんだけ探査機をずらして、画面の天体に合わせた。
+変換に使ったプログラムは `tools/make_spacecraft_data.py` です。
+はやぶさ（初代）は Horizons に2009年より前の位置がないため、通過点から計算したおおよその航路です。

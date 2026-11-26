@@ -1931,7 +1931,11 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue("u_offset", QVector3D(*sun_rel))
             p.setUniformValue1f("u_scale", 1.0)
             for sc in crafts.SPACECRAFT:
-                alpha = 0.95 if sc.key == self.target else 0.6
+                # 航路が多いので、いま飛んでいる探査機（と選んでいる探査機）だけ描く
+                t0, t1 = crafts.span(sc)
+                if sc.key != self.target and not (t0 <= self.jd <= t1):
+                    continue
+                alpha = 0.95 if sc.key == self.target else (0.35 if crafts.BY_KEY.get(self.target) else 0.5)
                 p.setUniformValue("u_color", QVector4D(*sc.color, alpha))
                 self.m_craft[sc.key].draw(f)
             p.release()
