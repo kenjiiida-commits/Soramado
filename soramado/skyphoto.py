@@ -7,6 +7,7 @@ Gaia 衛星が測った約17億個の星の明るさと色から、CDS が作っ
 
 from __future__ import annotations
 
+import math
 import threading
 from pathlib import Path
 
@@ -32,6 +33,10 @@ def path() -> Path:
     return data_dir() / "milkyway_gaia.jpg"
 
 
+def raw_path() -> Path:
+    return data_dir() / "milkyway_gaia_allsky.jpg"
+
+
 def _blur(a: np.ndarray, r: int) -> np.ndarray:
     """箱型のぼかし（横はつながっているので回り込む）。"""
     for ax in (0, 1):
@@ -44,10 +49,28 @@ def _blur(a: np.ndarray, r: int) -> np.ndarray:
     return a
 
 
+def _pole_smooth(a: np.ndarray) -> np.ndarray:
+    """正距円筒図は極に近いほど横に引き伸ばされるので、そのぶん横（赤経の方向）にならす。
+    ならさないと、星のつぶつぶが天の北極・南極から放射状の筋に見える。"""
+    h, w = a.shape[:2]
+    out = a.copy()
+    for i in range(h):
+        dec = 90.0 - (i + 0.5) / h * 180.0
+        stretch = 1.0 / max(math.cos(math.radians(dec)), 1e-3)
+        r = int(min(w // 2 - 1, 8.0 * (stretch - 1.0)))
+        if r < 2:
+            continue
+        row = a[i]
+        c = np.cumsum(np.concatenate([row[-r - 1:], row, row[:r]]), axis=0)
+        out[i] = (c[2 * r + 1:] - c[:-2 * r - 1]) / (2 * r + 1)
+    return out
+
+
 def process(img: np.ndarray) -> np.ndarray:
     """星の数のつぶつぶを少しならし、色を落ち着かせ、暗いところを沈める。"""
     a = img.astype(np.float32) / 255.0
     a = _blur(_blur(a, 2), 2)
+    a = _pole_smooth(a)
     # 元の地図にある緑のしみ（データのむら）を消す: 緑が赤と青の平均より強く出ないように
     a[..., 1] = np.minimum(a[..., 1], (a[..., 0] + a[..., 2]) * 0.5 * 1.08 + 0.01)
     lum = a.mean(axis=-1, keepdims=True)
@@ -125,6 +148,8 @@ class SkyDownloader:
                 img = _decode(data)
                 if img is None:
                     raise RuntimeError("画像を読めませんでした")
+                raw_path().parent.mkdir(parents=True, exist_ok=True)
+                raw_path().write_bytes(data)      # 元の画像も残す（整え方を変えたとき作り直せるように）
                 tile_px = img.shape[1] // 27
                 if self._cancel.is_set():
                     break
