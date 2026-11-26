@@ -243,6 +243,10 @@ class SpaceView(QOpenGLWidget):
         from PySide6.QtWidgets import QApplication
         QApplication.instance().aboutToQuit.connect(self._cleanup_gl)
 
+        self.recording = False
+        self._vclock = 0.0
+        self._on_frame = None
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(16)
@@ -338,7 +342,7 @@ class SpaceView(QOpenGLWidget):
         # 遠くへ行くときは、いったん引いて両方が見える高さを通る
         arc = max(0.0, math.log(max(sep, 1e-12) * 1.3) - max(math.log(d0), math.log(d1)))
         fl = {"from_focus": from_focus, "from_key": self.target, "to": to_key,
-              "from_dist": d0, "to_dist": d1, "arc": arc, "t0": time.monotonic(),
+              "from_dist": d0, "to_dist": d1, "arc": arc, "t0": self.now(),
               "dur": min(4.5, 1.6 + 0.35 * max(0.0, math.log10(max(sep / max(min(d0, d1), 1e-12), 1.0))))}
         if view_dir is not None:
             yaw1 = math.atan2(view_dir[1], view_dir[0])
@@ -457,7 +461,7 @@ class SpaceView(QOpenGLWidget):
     def _focus(self) -> np.ndarray:
         if self._fly:
             fl = self._fly
-            s = min(1.0, (time.monotonic() - fl["t0"]) / fl["dur"])
+            s = min(1.0, (self.now() - fl["t0"]) / fl["dur"])
             s = s * s * (3 - 2 * s)
             # 移動元の天体も動き続けるので、その時点の位置から補間する
             a = fl["from_focus"] if fl["from_key"] is None else self.display_pos(fl["from_key"])
@@ -474,10 +478,35 @@ class SpaceView(QOpenGLWidget):
 
     # ---------------------------------------------------------- 時間
 
+    def now(self) -> float:
+        """アニメーションの時計。録画中は「1コマ = 1/30秒」で進む仮想の時計になる。"""
+        return self._vclock if self.recording else time.monotonic()
+
+    def start_recording(self, on_frame):
+        """録画を始める。描画するたびに on_frame(画像) が呼ばれる。"""
+        self._vclock = time.monotonic()
+        if self._fly:      # 飛行中なら、仮想の時計に合わせて続ける
+            self._fly["t0"] -= time.monotonic() - self._vclock
+        self._on_frame = on_frame
+        self.recording = True
+
+    def stop_recording(self):
+        if self.recording and self._fly:
+            self._fly["t0"] += time.monotonic() - self._vclock
+        self.recording = False
+        self._on_frame = None
+        self._last_tick = time.monotonic()
+
     def _tick(self):
-        now = time.monotonic()
-        dt = now - self._last_tick
-        self._last_tick = now
+        if self.recording:
+            from .recorder import FPS
+            self._vclock += 1.0 / FPS
+            dt = 1.0 / FPS
+        else:
+            now = time.monotonic()
+            dt = now - self._last_tick
+            self._last_tick = now
+        now = self.now()
         if not self.paused and self.speed != 0:
             self.set_jd(self.jd + dt * self.speed / 86400.0)
         if self._fly:
@@ -491,7 +520,11 @@ class SpaceView(QOpenGLWidget):
                 self.pitch = fl["pitch0"] + (fl["pitch1"] - fl["pitch0"]) * e
             if s >= 1.0:
                 self._fly = None
-        self.update()
+        if self.recording and self._on_frame:
+            # 1コマずつ確実に描いて、録画に渡す
+            self._on_frame(self.grabFramebuffer())
+        else:
+            self.update()
 
     def _refresh_positions(self):
         self.positions = sbs.add_positions(sats.add_positions(astro.all_positions(self.jd), self.jd), self.jd)

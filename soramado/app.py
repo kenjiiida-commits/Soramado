@@ -7,8 +7,8 @@ from datetime import timezone
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDockWidget,
                                QFrame, QTextBrowser, QVBoxLayout,
                                QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMainWindow,
@@ -23,6 +23,7 @@ from . import smallbodies as sbs
 from . import tours
 from . import cosmos
 from . import spacecraft as crafts
+from . import recorder
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -61,6 +62,8 @@ HELP_TEXT = """<h3>操作方法</h3>
 <tr><td><b>スペース</b></td><td>時間を止める・動かす</td></tr>
 <tr><td><b>+ / −</b></td><td>近づく・離れる</td></tr>
 <tr><td><b>F11</b></td><td>全画面表示</td></tr>
+<tr><td><b>Ctrl+S</b></td><td>画面を画像で保存（ピクチャ/Soramado）</td></tr>
+<tr><td><b>Ctrl+R</b></td><td>録画の開始・停止（ビデオ/Soramado、ffmpeg が必要）</td></tr>
 </table>
 <p><b>地上から見る（プラネタリウム）</b></p>
 <table cellpadding="3">
@@ -109,9 +112,12 @@ class MainWindow(QMainWindow):
         self._build_panel()
         self._build_menu()
         self._tour = None
-        self._tour_timer = QTimer(self)
-        self._tour_timer.setSingleShot(True)
-        self._tour_timer.timeout.connect(lambda: self._tour_go(+1))
+        self._tour_deadline = None
+        self._rec = None
+        self._rec_tour = False
+        self._tour_timer = QTimer(self)        # 場面の切り替えは、ビューの時計で判定する
+        self._tour_timer.timeout.connect(self._tour_check)
+        self._tour_timer.start(50)
 
         self.status_info = QLabel()
         self.status_warn = QLabel()
@@ -171,6 +177,13 @@ class MainWindow(QMainWindow):
         self.cb_place.addItem("緯度・経度を入力…", None)
         self.cb_place.activated.connect(self._on_place)
         tb.addWidget(self.cb_place)
+        tb.addSeparator()
+
+        self.btn_rec = QPushButton("⏺ 録画")
+        self.btn_rec.setCheckable(True)
+        self.btn_rec.setToolTip("画面を動画（MP4）に録画します")
+        self.btn_rec.toggled.connect(self._on_record)
+        tb.addWidget(self.btn_rec)
         tb.addSeparator()
 
         self.btn_play = QPushButton("⏸ 停止")
@@ -243,6 +256,18 @@ class MainWindow(QMainWindow):
         act_dl = QAction("惑星の画像をダウンロード…", self)
         act_dl.triggered.connect(lambda: self._start_download(force=True))
         m_file.addAction(act_dl)
+        act_shot = QAction("画面を画像で保存", self)
+        act_shot.setShortcut(QKeySequence("Ctrl+S"))
+        act_shot.triggered.connect(self.save_picture)
+        m_file.insertAction(m_file.actions()[0] if m_file.actions() else None, act_shot)
+        act_rec = QAction("録画の開始・停止", self)
+        act_rec.setShortcut(QKeySequence("Ctrl+R"))
+        act_rec.triggered.connect(lambda: self.btn_rec.toggle())
+        m_file.insertAction(m_file.actions()[1], act_rec)
+        act_open = QAction("保存したフォルダを開く", self)
+        act_open.triggered.connect(self._open_folders)
+        m_file.insertAction(m_file.actions()[2], act_open)
+        m_file.insertSeparator(m_file.actions()[3])
         act_q = QAction("クエーサーのデータをダウンロード…", self)
         act_q.triggered.connect(self._download_quasars)
         m_file.addAction(act_q)
@@ -284,6 +309,12 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _=False, t=tid: self.start_tour(t))
             m_tour.addAction(act)
         m_tour.addSeparator()
+        m_rec = m_tour.addMenu("ツアーを動画にする")
+        for tid, title, _fn in tours.TOURS:
+            act = QAction(title, self)
+            act.triggered.connect(lambda _=False, t=tid: self.record_tour(t))
+            m_rec.addAction(act)
+        m_tour.addSeparator()
         act_stop = QAction("ツアーを終わる", self)
         act_stop.setShortcut(QKeySequence("Esc"))
         act_stop.triggered.connect(self.stop_tour)
@@ -298,6 +329,73 @@ class MainWindow(QMainWindow):
         m_help.addAction(act_about)
 
     # ---------------------------------------------------------- 動作
+
+    # ---------------------------------------------------------- 画像・動画
+
+    def save_picture(self):
+        path = recorder.picture_path()
+        img = self.view.grabFramebuffer()
+        if img.save(str(path)):
+            self.statusBar().showMessage(f"画像を保存しました: {path}", 8000)
+        else:
+            QMessageBox.warning(self, "画像の保存", f"保存できませんでした: {path}")
+
+    def _open_folders(self):
+        for p in (recorder.picture_path().parent, recorder.video_path().parent):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+
+    def _on_record(self, on):
+        v = self.view
+        if on:
+            if not recorder.ffmpeg_available():
+                QMessageBox.warning(self, "録画", "録画には ffmpeg が必要です。端末で次のコマンドを実行してください。\n\n"
+                                    "sudo apt install ffmpeg")
+                self.btn_rec.blockSignals(True)
+                self.btn_rec.setChecked(False)
+                self.btn_rec.blockSignals(False)
+                return
+            img = v.grabFramebuffer()
+            self._rec = recorder.VideoRecorder(recorder.video_path(), img.width(), img.height())
+            v.start_recording(self._rec_frame)
+            self.btn_rec.setText("⏹ 停止 0:00")
+            self.btn_rec.setStyleSheet("QPushButton { color: #ff5050; font-weight: bold; }")
+        else:
+            v.stop_recording()
+            self.btn_rec.setText("⏺ 録画")
+            self.btn_rec.setStyleSheet("")
+            rec, self._rec = self._rec, None
+            if rec is None:
+                return
+            ok, err = rec.finish()
+            if ok:
+                box = QMessageBox(self)
+                box.setWindowTitle("録画")
+                box.setText(f"{rec.seconds:.1f} 秒の動画を保存しました。\n{rec.path}")
+                b_open = box.addButton("フォルダを開く", QMessageBox.ActionRole)
+                box.addButton(QMessageBox.Ok)
+                box.exec()
+                if box.clickedButton() is b_open:
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(rec.path.parent)))
+            else:
+                QMessageBox.warning(self, "録画", "動画を保存できませんでした。\n\n" + err[-800:])
+
+    def _rec_frame(self, img):
+        rec = self._rec
+        if rec is None:
+            return
+        if not rec.add(img):
+            QTimer.singleShot(0, lambda: self.btn_rec.setChecked(False))
+            return
+        if rec.frames % 15 == 0:
+            sec = int(rec.seconds)
+            self.btn_rec.setText(f"⏹ 停止 {sec // 60}:{sec % 60:02d}")
+
+    def record_tour(self, tid):
+        if self.btn_rec.isChecked():
+            self.btn_rec.setChecked(False)
+        self.start_tour(tid)
+        self._rec_tour = True
+        self.btn_rec.setChecked(True)
 
     # ---------------------------------------------------------- クエーサーのダウンロード
 
@@ -435,8 +533,16 @@ class MainWindow(QMainWindow):
         if not self._tour:
             return
         self._tour = None
-        self._tour_timer.stop()
+        self._tour_deadline = None
         self.tour_bar.hide()
+        if self._rec_tour and self.btn_rec.isChecked():
+            self._rec_tour = False
+            self.btn_rec.setChecked(False)
+
+    def _tour_check(self):
+        if self._tour and self._tour_deadline is not None and self.view.now() >= self._tour_deadline:
+            self._tour_deadline = None
+            self._tour_go(+1)
 
     def _tour_go(self, d):
         tr = self._tour
@@ -479,7 +585,7 @@ class MainWindow(QMainWindow):
         self.tour_label.setText(st.text)
         self.tour_count.setText(f"{tr['title']}　{i + 1} / {len(tr['steps'])}")
         fly = v._fly["dur"] if v._fly else 0.0
-        self._tour_timer.start(int((st.seconds + fly) * 1000))
+        self._tour_deadline = v.now() + st.seconds + fly
         self._update_panel(force=True)
         v.update()
 
@@ -792,6 +898,8 @@ class MainWindow(QMainWindow):
             "<p>このソフトは国立天文台の Mitaka とは関係のない独自のソフトです。</p>")
 
     def closeEvent(self, e):
+        if self.btn_rec.isChecked():
+            self.btn_rec.setChecked(False)
         if self._download:
             worker, timer, _ = self._download
             timer.stop()
