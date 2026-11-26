@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,8 @@ from . import events as evt
 from . import artsat
 from . import dsoimages
 from . import skyphoto
+from . import tonight
+from .constellation_info import INFO as CON_INFO
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -153,6 +156,8 @@ class MainWindow(QMainWindow):
         self._restore_place()
         self._restore_settings()
         QTimer.singleShot(400, self._check_gl)
+        if str(self.settings.value("ui/tonight_on_start", "false")).lower() in ("true", "1"):
+            QTimer.singleShot(1500, lambda: self._show_tonight())
 
     # ---------------------------------------------------------- 画面の部品
 
@@ -383,6 +388,11 @@ class MainWindow(QMainWindow):
             m_lang.addAction(a)
 
         m_ev = mb.addMenu(tr("天文現象(&E)"))
+        act_tn = QAction(tr("今夜の空ガイド…"), self)
+        act_tn.setShortcut(QKeySequence("Ctrl+G"))
+        act_tn.triggered.connect(lambda: self._show_tonight())
+        m_ev.addAction(act_tn)
+        m_ev.addSeparator()
         act_ecl = QAction(tr("日食・月食…"), self)
         act_ecl.setShortcut(QKeySequence("Ctrl+E"))
         act_ecl.triggered.connect(self._show_eclipses)
@@ -1090,17 +1100,7 @@ class MainWindow(QMainWindow):
                      f"放射点の高さ {n.radiant_alt:.0f}°・月 {n.moon_illum * 100:.0f}%・{sh.parent}"]
             rows.append((cells, n.jd_best is not None and n.rate >= 3, n))
 
-        def go(n):
-            jd = n.jd_best or n.jd_peak
-            self._ground_at(jd)
-            ok = v.look_dir(evt.radiant_vector(n.shower), fov=100.0)
-            self.act_meteor.setChecked(True)
-            msg = (f"{n.shower.name} (meteors shown about {v.METEOR_BOOST:.0f}× more often than real)" if EN_MODE else
-                   f"{n.shower.name}：{n.shower.note}（流れる数は実際の約{v.METEOR_BOOST:.0f}倍に増やしています）")
-            if not ok:
-                msg = tr("このとき放射点は地平線の下です。") + msg
-            self.statusBar().showMessage(trx(msg), 20000)
-
+        go = self._go_shower
         self._event_table(
             trx(f"流星群（これから1年・観測地 {v.place}）"),
             [tr("極大"), tr("流星群"), tr("見やすい時刻"), tr("見える数の目安"), tr("月明かり"), tr("くわしく")], rows,
@@ -1108,6 +1108,226 @@ class MainWindow(QMainWindow):
             "流星は放射点から四方へ飛ぶので、放射点だけでなく空全体を広く見るのがこつです。\n"
             "「地上から見る」で、見やすい時刻の空に流星が流れます（流れる数は実際の約10倍に増やしています）。",
             go)
+
+    # ---------------------------------------------------------- 今夜の空ガイド
+
+    def _show_tonight(self, date=None):
+        if not tonight.available():
+            QMessageBox.warning(self, tr("今夜の空ガイド"), tr("PyEphem（python3-ephem）が必要です。"))
+            return
+        if getattr(self, "_tn_dlg", None) is not None:
+            self._tn_dlg.raise_()
+            self._tn_dlg.activateWindow()
+            return
+        from PySide6.QtWidgets import QApplication
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("今夜の空ガイド"))
+        dlg.resize(760, 820)
+        lay = QVBoxLayout(dlg)
+        nav = QHBoxLayout()
+        b_prev = QPushButton(tr("◀ 前の夜"))
+        b_today = QPushButton(tr("今夜"))
+        b_next = QPushButton(tr("次の夜 ▶"))
+        for b in (b_prev, b_today, b_next):
+            nav.addWidget(b)
+        nav.addStretch(1)
+        lay.addLayout(nav)
+        tb = QTextBrowser()
+        tb.setOpenLinks(False)
+        lay.addWidget(tb, 1)
+        chk = QCheckBox(tr("そらみ窓を起動したときに、今夜の空ガイドを出す"))
+        chk.setChecked(str(self.settings.value("ui/tonight_on_start", "false")).lower() in ("true", "1"))
+        chk.toggled.connect(lambda on: self.settings.setValue("ui/tonight_on_start", bool(on)))
+        lay.addWidget(chk)
+        bb = QDialogButtonBox()
+        bb.addButton(tr("閉じる"), QDialogButtonBox.RejectRole)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        state = {"date": date or datetime.now().astimezone(), "guide": None}
+
+        def refresh():
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                v = self.view
+                state["guide"] = tonight.build(state["date"], v.lat, v.lon, v.stars,
+                                               {k: x[0] for k, x in CON_INFO.items()}, v.artsats)
+                tb.setHtml(self._tonight_html(state["guide"]))
+            finally:
+                QApplication.restoreOverrideCursor()
+
+        def shift(days):
+            state["date"] = tonight.night_of(state["date"]) + timedelta(days=days)
+            refresh()
+
+        b_prev.clicked.connect(lambda: shift(-1))
+        b_next.clicked.connect(lambda: shift(1))
+        b_today.clicked.connect(lambda: (state.__setitem__("date", datetime.now().astimezone()), refresh()))
+        tb.anchorClicked.connect(lambda url: self._tonight_go(url.toString(), state["guide"]))
+        dlg.finished.connect(lambda *_: setattr(self, "_tn_dlg", None))
+        self._tn_dlg = dlg
+        refresh()
+        dlg.setModal(False)
+        dlg.show()
+
+    def _tonight_html(self, g) -> str:
+        v = self.view
+
+        def L(ja, en):
+            return en if EN_MODE else ja
+
+        def hm(jd):
+            return self._local_time(jd, False) if jd else "―"
+
+        dirs = [tr("北"), tr("北北東"), tr("北東"), tr("東北東"), tr("東"), tr("東南東"), tr("南東"), tr("南南東"),
+                tr("南"), tr("南南西"), tr("南西"), tr("西南西"), tr("西"), tr("西北西"), tr("北西"), tr("北北西")]
+
+        def d(az):
+            return dirs[int((az + 11.25) // 22.5) % 16]
+
+        def go(href, label=None):
+            return f" <a href='{href}'>{label or L('［空を見る］', '[view]')}</a>"
+
+        con_by_id = {c.id: c.name for c in v.stars.constellations}
+        n = g.night
+        day = n.date
+        nxt = day + timedelta(days=1)
+        if EN_MODE:
+            title = f"Tonight's sky — {v.place}, {day:%b %-d}–{nxt:%-d}, {day:%Y}"
+        else:
+            title = f"今夜の空 — {v.place}・{day.year}年{day.month}月{day.day}日〜{nxt.day}日"
+        h = [f"<h2>{title}</h2>"]
+        h.append("<p>" + L(f"日の入り {hm(n.sunset)} → 暗くなる {hm(n.dusk)} … 明るくなりはじめる {hm(n.dawn)} → 日の出 {hm(n.sunrise)}",
+                           f"Sunset {hm(n.sunset)} → dark {hm(n.dusk)} … dawn {hm(n.dawn)} → sunrise {hm(n.sunrise)}") + "</p>")
+        # 月
+        m = g.moon
+        if m:
+            phase_en = {"新月": "New moon", "三日月": "Crescent", "上弦前の月": "Waxing crescent", "上弦の月": "First quarter",
+                        "十日夜〜十三夜の月": "Waxing gibbous", "満月": "Full moon", "満月すぎの月": "Waning gibbous",
+                        "下弦の月": "Last quarter", "有明の月": "Waning crescent"}
+            h.append("<h3>" + L("月", "Moon") + "</h3><p>")
+            h.append(L(f"<b>{m.phase}</b>（月齢 {m.age:.1f}・明るい部分 {m.illum * 100:.0f}%）",
+                       f"<b>{phase_en.get(m.phase, m.phase)}</b> (age {m.age:.1f} d, {m.illum * 100:.0f}% lit)"))
+            h.append("<br>" + L(f"月の出 {hm(m.rise)}・月の入り {hm(m.set)}", f"Moonrise {hm(m.rise)}, moonset {hm(m.set)}"))
+            if m.best:
+                h.append(go("go:moon"))
+            if m.bright_night:
+                h.append("<br><span style='color:#c96'>" + L("明るい月が夜の多くの時間に出ているので、暗い星や天の川は見えにくい夜です。",
+                                                           "A bright Moon is up most of the night, so faint stars and the Milky Way are hard to see.") + "</span>")
+            elif m.illum < 0.3:
+                h.append("<br><span style='color:#7c9'>" + L("月明かりが少なく、星空を見るのによい夜です。",
+                                                           "Little moonlight — a good night for stargazing.") + "</span>")
+            h.append("</p>")
+        # 惑星
+        h.append("<h3>" + L("惑星", "Planets") + "</h3><ul>")
+        when_ja = {"evening": "宵の空", "morning": "明け方の空", "night": "夜中から明け方", "all": "一晩中", "late": "夜中"}
+        when_en = {"evening": "evening", "morning": "morning", "night": "late night to dawn", "all": "all night",
+                   "late": "late night"}
+        seen = sorted((p for p in g.planets if p.start), key=lambda p: p.start)
+        for p in seen:
+            name = BY_KEY[p.key].name
+            con = con_by_id.get(p.con, p.con)
+            h.append("<li>" + L(
+                f"<b>{name}</b>（{p.mag:.1f}等・{con}）{when_ja[p.when]}　{hm(p.start)}〜{hm(p.end)}"
+                f"<br>　いちばん高いのは {hm(p.best)}（{d(p.best_az)}・高さ {p.best_alt:.0f}°）",
+                f"<b>{name}</b> (mag {p.mag:.1f}, {con}) {when_en[p.when]}, {hm(p.start)}–{hm(p.end)}"
+                f"<br>　Highest at {hm(p.best)} ({d(p.best_az)}, alt {p.best_alt:.0f}°)") + go(f"go:planet:{p.key}") + "</li>")
+        h.append("</ul>")
+        hidden = [BY_KEY[p.key].name for p in g.planets if not p.start]
+        if hidden:
+            h.append("<p style='color:#888'>" + L("太陽に近いなどで見えない: ", "Not visible (too close to the Sun etc.): ")
+                     + L("・", ", ").join(hidden) + "</p>")
+        # 星座
+        if g.cons:
+            h.append("<h3>" + L(f"{hm(g.con_jd)}ごろ高く見える星座", f"Constellations high at {hm(g.con_jd)}") + "</h3><p>")
+            h.append(L("　", ", ").join(
+                f"<a href='go:con:{c.index}'>{v.stars.constellations[c.index].name}</a>"
+                + L(f"（{d(c.az)}・{c.alt:.0f}°）", f" ({d(c.az)} {c.alt:.0f}°)") for c in g.cons) + "</p>")
+        # 人工衛星
+        h.append("<h3>" + L("人工衛星（ISS など）", "Satellites (ISS etc.)") + "</h3>")
+        if not v.artsats:
+            h.append("<p style='color:#888'>" + L("人工衛星のデータがありません。", "No satellite data.")
+                     + go("dl:tle", L("［ダウンロードする］", "[download]")) + "</p>")
+        elif g.passes:
+            h.append("<ul>")
+            for i, p in enumerate(g.passes):
+                h.append("<li>" + L(f"<b>{p.sat.ja}</b> {hm(p.rise_jd)} {d(p.rise_az)}から → 最大 {p.max_alt:.0f}°"
+                                    f"（{d(p.max_az)}・{hm(p.max_jd)}） → {d(p.set_az)}へ",
+                                    f"<b>{p.sat.ja}</b> {hm(p.rise_jd)} from {d(p.rise_az)} → max {p.max_alt:.0f}°"
+                                    f" ({d(p.max_az)}, {hm(p.max_jd)}) → {d(p.set_az)}") + go(f"go:pass:{i}") + "</li>")
+            h.append("</ul>")
+        else:
+            h.append("<p style='color:#888'>" + L("今夜、見える通過はありません。", "No visible passes tonight.") + "</p>")
+        # 流星群
+        if g.showers:
+            h.append("<h3>" + L("流星群", "Meteor showers") + "</h3><ul>")
+            for i, sn in enumerate(g.showers):
+                h.append("<li>" + L(f"<b>{sn.shower.name}</b>（極大 {self._local_time(sn.jd_peak)}）見やすいのは {hm(sn.jd_best)}・"
+                                    f"1時間に約{sn.rate:.0f}個・{sn.condition}",
+                                    f"<b>{sn.shower.name}</b> (peak {self._local_time(sn.jd_peak)}) best at {hm(sn.jd_best)}, "
+                                    f"about {sn.rate:.0f}/h, {sn.condition}") + go(f"go:shower:{i}") + "</li>")
+            h.append("</ul>")
+        # これからの天文現象
+        if g.events or g.eclipses:
+            h.append("<h3>" + L("これからの天文現象", "Coming up") + "</h3><ul>")
+            for i, e in enumerate(g.eclipses):
+                h.append(f"<li>{self._local_time(e.jd_max)}　<b>{e.type_ja}</b>　{self._eclipse_local_text(e)}"
+                         + (go(f"go:ecl:{i}") if e.local.get("visible") else "") + "</li>")
+            for i, e in enumerate(g.events):
+                vis = e.local.get("visible")
+                h.append(f"<li>{self._local_time(e.jd)}　{e.title}"
+                         + (L(f"（{v.place}で見やすいのは {self._local_time(e.local['jd'], False)}ごろ）",
+                              f" (best from {v.place} around {self._local_time(e.local['jd'], False)})") + go(f"go:event:{i}")
+                            if vis else "<span style='color:#888'>" + L("（見えにくい）", " (hard to see)") + "</span>") + "</li>")
+            h.append("</ul>")
+        h.append("<p style='color:#888'>" + L("「空を見る」を押すと、そのときの空を地上モードで見られます。時刻はこのパソコンの時刻帯です。",
+                                              "Press [view] to see that sky in ground mode. Times are in this computer's time zone.")
+                 + "</p>")
+        return "".join(h)
+
+    def _tonight_go(self, href: str, g):
+        if g is None:
+            return
+        v = self.view
+        parts = href.split(":")
+        kind = parts[0] + (":" + parts[1] if len(parts) > 1 else "")
+        if kind != "go:con" and v.selected_con >= 0:
+            v.select_con(-1)
+        if href == "dl:tle":
+            self._download_tle(then=lambda: (self._tn_dlg and self._tn_dlg.close(), self._show_tonight()))
+            return
+        if kind == "go:moon" and g.moon and g.moon.best:
+            self._ground_at(g.moon.best)
+            self._look_at_keys(["moon"], 40.0)
+        elif kind == "go:planet":
+            p = next((x for x in g.planets if x.key == parts[2]), None)
+            if p and p.best:
+                self._ground_at(p.best)
+                self._look_at_keys([p.key], 50.0)
+        elif kind == "go:con":
+            i = int(parts[2])
+            self._ground_at(g.con_jd)
+            v.look_dir(v.stars.constellations[i].center, fov=80.0)
+            v.select_con(i)
+        elif kind == "go:pass":
+            self._go_pass(g.passes[int(parts[2])])
+        elif kind == "go:shower":
+            self._go_shower(g.showers[int(parts[2])])
+        elif kind == "go:event":
+            self._go_event(g.events[int(parts[2])])
+        elif kind == "go:ecl":
+            self._go_eclipse(g.eclipses[int(parts[2])], True)
+
+    def _go_shower(self, n):
+        v = self.view
+        jd = n.jd_best or n.jd_peak
+        self._ground_at(jd)
+        ok = v.look_dir(evt.radiant_vector(n.shower), fov=100.0)
+        self.act_meteor.setChecked(True)
+        msg = (f"{n.shower.name} (meteors shown about {v.METEOR_BOOST:.0f}× more often than real)" if EN_MODE else
+               f"{n.shower.name}：{n.shower.note}（流れる数は実際の約{v.METEOR_BOOST:.0f}倍に増やしています）")
+        if not ok:
+            msg = tr("このとき放射点は地平線の下です。") + msg
+        self.statusBar().showMessage(trx(msg), 20000)
 
     def _download_tle(self, then=None):
         if getattr(self, "_tle_dl", None):
@@ -1179,16 +1399,7 @@ class MainWindow(QMainWindow):
                      tr("見える（夜空で太陽の光を反射）") if p.visible else tr("見えない（昼間か、地球の影の中）")]
             rows.append((cells, p.visible, p))
 
-        def go(p):
-            self._ground_at(p.max_jd - 1.5 / 1440)
-            a, z = math.radians(p.max_alt), math.radians(p.max_az)
-            off, zen, north, east = astro.observer_frame(v.jd, v.lat, v.lon)
-            v.look_dir(zen * math.sin(a) + (north * math.cos(z) + east * math.sin(z)) * math.cos(a), fov=110.0)
-            self.cb_speed.setCurrentIndex(0)      # 実時間で動かす
-            self._apply_speed()
-            v.paused = False
-            self._refresh_ui()
-
+        go = self._go_pass
         note = ("高度10°より高く昇るときの一覧です（これから10日）。「見える」は、空が暗く、衛星に太陽の光が当たっているときで、"
                 "明るい星のような光がゆっくり空を横切ります。「地上から見る」で、そのときの空を実時間で見られます。")
         if age > 7:
@@ -1196,6 +1407,35 @@ class MainWindow(QMainWindow):
                     f"⚠ 軌道のデータが {age:.0f} 日前のもので古くなっています。「ファイル」からダウンロードし直してください。\n") + tr(note)
         self._event_table(trx(f"人工衛星が見える時刻（これから10日・観測地 {v.place}）"),
                           [tr("昇る時刻"), tr("衛星"), tr("動き（方角）"), tr("見え方")], rows, note, go)
+
+    def _go_pass(self, p):
+        v = self.view
+        self._ground_at(p.max_jd - 1.5 / 1440)
+        a, z = math.radians(p.max_alt), math.radians(p.max_az)
+        off, zen, north, east = astro.observer_frame(v.jd, v.lat, v.lon)
+        v.look_dir(zen * math.sin(a) + (north * math.cos(z) + east * math.sin(z)) * math.cos(a), fov=110.0)
+        self.cb_speed.setCurrentIndex(0)      # 実時間で動かす
+        self._apply_speed()
+        v.paused = False
+        self._refresh_ui()
+
+    def _look_at_keys(self, keys, fov):
+        """地上モードで、その天体（いくつかなら、そのまん中）の方を向く。"""
+        v = self.view
+        pos = [v.display_pos(k) for k in keys]
+        off, _z, _n, _e = astro.observer_frame(v.jd, v.lat, v.lon)
+        eye = v.positions["earth"] + off
+        dirs = [(p - eye) / np.linalg.norm(p - eye) for p in pos]
+        mid = sum(dirs) / len(dirs)
+        return v.look_dir(mid / np.linalg.norm(mid), fov=fov)
+
+    def _go_event(self, e):
+        self._ground_at(e.local.get("jd") or e.jd)
+        sep = e.local.get("sep", e.sep)       # 観測地から見た離れ角（月は場所で変わる）
+        fov = {"conj": max(6.0, sep * 2.5), "occult": max(4.0, sep * 2.5), "opposition": 40.0,
+               "elong": 50.0}[e.kind]
+        if not self._look_at_keys(e.keys, fov):
+            self.statusBar().showMessage(tr("このとき、観測地では地平線の下です"), 8000)
 
     def _show_events(self):
         if not evt.available():
@@ -1223,21 +1463,7 @@ class MainWindow(QMainWindow):
                 det += tr("（地球のどこかで月が惑星をかくす惑星食）")
             rows.append(([self._local_time(e.jd), e.title, look, det], bool(loc.get("visible")), e))
 
-        def go(e):
-            jd = e.local.get("jd") or e.jd
-            self._ground_at(jd)
-            pos = [v.display_pos(k) for k in e.keys]
-            off, _z, _n, _e = astro.observer_frame(v.jd, v.lat, v.lon)
-            eye = v.positions["earth"] + off
-            dirs = [(p - eye) / np.linalg.norm(p - eye) for p in pos]
-            mid = sum(dirs) / len(dirs)
-            sep = e.local.get("sep", e.sep)       # 観測地から見た離れ角（月は場所で変わる）
-            fov = {"conj": max(6.0, sep * 2.5), "occult": max(4.0, sep * 2.5), "opposition": 40.0,
-                   "elong": 50.0}[e.kind]
-            ok = v.look_dir(mid / np.linalg.norm(mid), fov=fov)
-            if not ok:
-                self.statusBar().showMessage(tr("このとき、観測地では地平線の下です"), 8000)
-
+        go = self._go_event
         self._event_table(
             trx(f"惑星・月の接近と見ごろ（これから1年あまり・観測地 {v.place}）"),
             [tr("日時"), tr("できごと"), trx(f"{v.place}での見やすい時刻"), tr("くわしく")], rows,
