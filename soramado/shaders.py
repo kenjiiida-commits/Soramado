@@ -52,7 +52,35 @@ uniform vec3 u_shadow_c;     // 環の影を落とす天体（土星）の中心
 uniform vec3 u_ring_n;       // 環の面の法線
 uniform vec2 u_ring_r;       // 環の内径・外径（表示上の大きさ）
 uniform int u_has_ring;
+uniform vec4 u_occ;          // 日食・月食で太陽をかくす天体（xyz: 中心, w: 半径。w=0 なら無し）
+uniform float u_sun_r;       // 太陽の半径
+uniform int u_occ_red;       // 1 なら、かげの中を赤銅色にする（月食の月）
 out vec4 frag;
+
+// 太陽（半径 rs）が半径 ro の円にかくされる面積の割合（中心の間の角 d）
+float overlapFrac(float rs, float ro, float d) {
+    if (d >= rs + ro) return 0.0;
+    if (d <= abs(ro - rs)) return ro >= rs ? 1.0 : (ro * ro) / (rs * rs);
+    float a = rs * rs * acos(clamp((d * d + rs * rs - ro * ro) / (2.0 * d * rs), -1.0, 1.0));
+    float b = ro * ro * acos(clamp((d * d + ro * ro - rs * rs) / (2.0 * d * ro), -1.0, 1.0));
+    float c = 0.5 * sqrt(max(0.0, (-d + rs + ro) * (d + rs - ro) * (d - rs + ro) * (d + rs + ro)));
+    return clamp((a + b - c) / (3.14159265 * rs * rs), 0.0, 1.0);
+}
+
+// この点から見て、太陽がどれだけ見えているか（1=全部、0=皆既）
+float sunVisible(vec3 p) {
+    if (u_occ.w <= 0.0) return 1.0;
+    vec3 ds = u_sun - p;
+    vec3 dobj = u_occ.xyz - p;
+    float ls = length(ds);
+    float lo = length(dobj);
+    if (lo >= ls || lo <= u_occ.w) return 1.0;
+    float rs = asin(min(1.0, u_sun_r / ls));
+    float ro = asin(min(1.0, u_occ.w / lo));
+    float d = atan(length(cross(ds, dobj)), dot(ds, dobj));
+    return 1.0 - overlapFrac(rs, ro, d);
+}
+
 void main() {
     writeDepth();
     vec3 n = normalize(v_normal);
@@ -82,7 +110,13 @@ void main() {
         float c = texture(u_clouds, v_uv).r;
         col = mix(col, vec3(1.0), c * 0.85);
     }
-    col = col * (0.025 + 1.05 * diff);
+    float vis = diff > 0.0 ? sunVisible(v_world) : 1.0;
+    vec3 lit = col * (0.025 + 1.05 * diff * vis);
+    if (u_occ_red == 1) {
+        // 皆既月食の月が赤く見えるのは、地球の大気で曲げられた赤い光が影の中に届くから
+        lit += col * vec3(0.30, 0.09, 0.03) * diff * (1.0 - vis) * (1.0 - vis);
+    }
+    col = lit;
     if (u_mode == 2 && u_has_night == 1) {
         float dark = 1.0 - smoothstep(-0.15, 0.05, ndl);
         col += texture(u_night, v_uv).rgb * dark * 0.9;
@@ -366,12 +400,13 @@ uniform float u_ty;        // tan(視野/2)
 uniform vec3 u_zen;        // 天頂
 uniform vec3 u_sun;        // 太陽の方向
 uniform float u_sunalt;    // 太陽の高度 [度]
+uniform float u_sunlight;  // 日食のとき、太陽が見えている割合で空を暗くする（0〜1）
 uniform int u_mode;        // 0=空, 1=地面
 out vec4 frag;
 void main() {
     vec3 ray = normalize(u_fwd + v_ndc.x * u_tx * u_right + v_ndc.y * u_ty * u_up);
     float alt = dot(ray, u_zen);
-    float day = smoothstep(-6.0, 8.0, u_sunalt);
+    float day = smoothstep(-6.0, 8.0, u_sunalt) * u_sunlight;
     float twi = smoothstep(-18.0, -3.0, u_sunalt);
     if (u_mode == 1) {
         if (alt >= 0.0) discard;

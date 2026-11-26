@@ -6,7 +6,7 @@ import math
 import time
 
 import numpy as np
-from PySide6.QtCore import QPointF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QMatrix3x3, QMatrix4x4, QPainter, QPen, QVector2D, QVector3D, QVector4D
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture,
                               QOpenGLVertexArrayObject)
@@ -22,6 +22,7 @@ from . import cosmos
 from . import spacecraft as crafts
 from . import minorplanets as mpl
 from . import exoplanets as exo
+from . import eclipses
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -219,6 +220,7 @@ class SpaceView(QOpenGLWidget):
         self.show_cmb = True
         self.qso_count = 0
         self.gcat = GalaxyCatalog()
+        self._sunlight_sky = 1.0
         self.show_exo = True
         self.exo = exo.load()        # 系外惑星（ダウンロードしたとき）
         self._exo_orbits = {}        # 惑星系の番号 → 軌道の線のリスト
@@ -351,13 +353,14 @@ class SpaceView(QOpenGLWidget):
         self.update()
         return alt > 0
 
-    def fly_to(self, key: str, dist: float | None = None, pitch: float | None = None):
+    def fly_to(self, key: str, dist: float | None = None, pitch: float | None = None, view_dir=None):
         """ツアー用：その天体へ、指定した距離まで飛んでいく。pitch は見下ろす角度 [度]。"""
         if not self.valid_key(key):
             return
         self.selected_star = -1
         new_dist = dist if dist is not None else self._default_dist(key)
-        view_dir = self._galaxy_view_dir(key)
+        if view_dir is None:
+            view_dir = self._galaxy_view_dir(key)
         if pitch is not None:
             p = math.radians(pitch)
             view_dir = np.array([math.cos(p) * math.cos(self.yaw), math.cos(p) * math.sin(self.yaw), math.sin(p)])
@@ -813,6 +816,8 @@ class SpaceView(QOpenGLWidget):
         self._exo_screen = None
         if self.exo is None or not self.show_exo or self.ground or not len(self.exo):
             return
+        if self._sun_far < 3000.0 and not self.is_exo(self.target):
+            return            # 太陽系の中を見ているときは、惑星や衛星のじゃまになるので出さない
         rel = self.exo.pos - self._eye
         clip = np.column_stack([rel, np.ones(len(rel))]) @ viewproj.T
         ok = clip[:, 3] > 0
@@ -1092,6 +1097,7 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue("u_zen", QVector3D(*zen))
         p.setUniformValue("u_sun", QVector3D(*(sun / np.linalg.norm(sun))))
         p.setUniformValue1f("u_sunalt", float(self._sun_alt))
+        p.setUniformValue1f("u_sunlight", float(self._sunlight_sky))
         p.setUniformValue1i("u_mode", mode)
         self.m_glow.draw(f)
         p.release()
@@ -1160,13 +1166,19 @@ class SpaceView(QOpenGLWidget):
         night = 1.0
         limit = self.limit_mag
         f.glDisable(GL_DEPTH_TEST)
+        self._sunlight_sky = 1.0
         if self.ground:
+            # 日食のときは、太陽がかくれた割合に応じて空を暗くする（9割以上欠けると目に見えて暗くなる）
+            if self.magnify <= 1.0001:
+                light = eclipses.sun_light_fraction(eye, self.display_pos("sun"), self.display_radius("sun"),
+                                                    self.display_pos("moon"), self.display_radius("moon"))
+                self._sunlight_sky = _smooth(0.0, 0.08, light)
             zen = self._gframe[0]
             sun_dir = sun_rel / np.linalg.norm(sun_rel)
             self._sun_alt = math.degrees(math.asin(max(-1.0, min(1.0, float(np.dot(sun_dir, zen))))))
             self._draw_sky(f, 0, w, h)
             # 空が明るいほど星は見えない
-            night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt)
+            night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky
             limit = self.limit_mag - (1.0 - night) * 7.0
         self._night = night
 
@@ -1255,6 +1267,15 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1i("u_has_night", int(has_night))
             p.setUniformValue1i("u_has_clouds", int(has_clouds))
             p.setUniformValue1i("u_has_ring", int(b.key == "saturn"))
+            # 日食（地球に落ちる月の影）と月食（月に落ちる地球の影）。拡大表示のときは位置関係が変わるので出さない
+            occ = {"earth": "moon", "moon": "earth"}.get(b.key) if self.magnify <= 1.0001 else None
+            if occ:
+                occ_r = self.display_radius(occ) * (1.02 if occ == "earth" else 1.0)   # 地球は大気のぶん少し大きな影
+                p.setUniformValue("u_occ", QVector4D(*rel[occ], occ_r))
+                p.setUniformValue1f("u_sun_r", float(self.display_radius("sun")))
+            else:
+                p.setUniformValue("u_occ", QVector4D(0, 0, 0, 0))
+            p.setUniformValue1i("u_occ_red", int(b.key == "moon"))
             if b.key == "saturn":
                 p.setUniformValue("u_shadow_c", QVector3D(*pos))
                 p.setUniformValue("u_ring_n", QVector3D(*sat_rot[:, 2]))
@@ -1358,7 +1379,9 @@ class SpaceView(QOpenGLWidget):
             p.release()
 
         # ---- 太陽の光芒
-        self._draw_glow(f, viewproj, w, h, sun_rel, self.display_radius("sun"), 4.83, (1.0, 0.78, 0.45))
+        k = self._sunlight_sky        # 皆既日食のときは光芒を弱め、白っぽいコロナのように見せる
+        sun_col = tuple(c * (0.25 + 0.75 * k) + 0.2 * (1 - k) for c in (1.0, 0.78, 0.45))
+        self._draw_glow(f, viewproj, w, h, sun_rel, self.display_radius("sun"), 4.83, sun_col)
 
         # ---- よその惑星系（選んでいるとき）
         self._draw_exo_system(f, viewproj, w, h)
@@ -1395,6 +1418,14 @@ class SpaceView(QOpenGLWidget):
         placed = []
         fm = painter.fontMetrics()
         far = getattr(self, "_sun_far", 0.0) > 3000.0
+        # 大きく見えている天体の円（この後ろにある天体や星の名前は出さない）
+        discs = []
+        for b in BODIES:
+            pr = self._project(rel[b.key], viewproj, w, h)
+            if pr and not self.sat_hidden(b.key):
+                r = self.display_radius(b.key) / pr[2] * focal
+                if r > 6:
+                    discs.append((b.key, pr[0], pr[1], r, pr[2]))
         for b in order:
             if far and b.key != "sun":
                 continue          # 太陽系から遠く離れると惑星は太陽に重なるので出さない
@@ -1409,6 +1440,9 @@ class SpaceView(QOpenGLWidget):
                 continue
             x, y, depth = pr
             rad_px = self.display_radius(b.key) / depth * focal
+            if any(k != b.key and dd < depth and math.hypot(x - dx, y - dy) < dr * 0.97
+                   for k, dx, dy, dr, dd in discs):
+                continue          # 手前の天体の後ろにかくれている
             self._screen[b.key] = (x, y, rad_px)
             if not (-50 < x < w + 50 and -50 < y < h + 50):
                 continue
@@ -1434,6 +1468,11 @@ class SpaceView(QOpenGLWidget):
             painter.setPen(QPen(col.lighter(130) if b.key == self.target else col))
             painter.drawText(QPointF(x + off, y - off * 0.3), b.name if not far else "太陽（太陽系）")
 
+        # 大きな天体の円の中には、ほかの名前（星・彗星など）を置かない
+        for _k, dx, dy, dr, _dd in discs:
+            if dr > 20 and not (self.ground and _k == "earth"):
+                a = dr * 0.7
+                placed.append(QRect(int(dx - a), int(dy - a), int(2 * a), int(2 * a)))
         if self.ground:
             self._draw_compass(painter, viewproj, w, h, placed, fm)
         else:

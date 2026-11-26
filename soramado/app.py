@@ -8,12 +8,13 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDockWidget,
                                QFrame, QTextBrowser, QVBoxLayout,
                                QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QToolBar,
-                               QWidget, QHBoxLayout, QSizePolicy, QFileDialog, QListWidget, QListWidgetItem)
+                               QWidget, QHBoxLayout, QSizePolicy, QFileDialog, QListWidget, QListWidgetItem,
+                               QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView)
 
 from . import __version__, astro, textures
 from .bodies import BODIES, BY_KEY
@@ -26,6 +27,7 @@ from . import spacecraft as crafts
 from . import recorder
 from . import minorplanets as mpl
 from . import exoplanets as exo
+from . import eclipses
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -72,6 +74,7 @@ HELP_TEXT = """<h3>操作方法</h3>
 <tr><td><b>F11</b></td><td>全画面表示</td></tr>
 <tr><td><b>Ctrl+S</b></td><td>画面を画像で保存（ピクチャ/Soramado）</td></tr>
 <tr><td><b>Ctrl+R</b></td><td>録画の開始・停止（ビデオ/Soramado、ffmpeg が必要）</td></tr>
+<tr><td><b>Ctrl+E</b></td><td>日食・月食の一覧</td></tr>
 <tr><td><b>Ctrl+F</b></td><td>小惑星・彗星・系外惑星を名前や番号で探す（データのダウンロードが必要）</td></tr>
 </table>
 <p><b>地上から見る（プラネタリウム）</b></p>
@@ -333,6 +336,12 @@ class MainWindow(QMainWindow):
 
         m_view.addSeparator()
         m_view.addAction(self.panel.toggleViewAction())
+
+        m_ev = mb.addMenu("天文現象(&E)")
+        act_ecl = QAction("日食・月食…", self)
+        act_ecl.setShortcut(QKeySequence("Ctrl+E"))
+        act_ecl.triggered.connect(self._show_eclipses)
+        m_ev.addAction(act_ecl)
 
         m_tour = mb.addMenu("ツアー(&T)")
         for tid, title, _fn in tours.TOURS:
@@ -690,6 +699,152 @@ class MainWindow(QMainWindow):
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
         dlg.exec()
+
+    # ---------------------------------------------------------- 日食・月食
+
+    @staticmethod
+    def _local_time(jd, with_date=True):
+        dt = astro.datetime_from_jd(jd).astimezone()
+        return dt.strftime("%Y年%-m月%-d日 %H:%M") if with_date else dt.strftime("%H:%M")
+
+    def _eclipse_local_text(self, e) -> str:
+        loc = e.local
+        place = self.view.place
+        if e.kind == "solar":
+            if not loc.get("visible"):
+                return f"{place}では見えない"
+            kind = {"total": "皆既", "annular": "金環"}.get(loc["type"], "部分日食")
+            t = self._local_time(loc["jd"], False)
+            txt = f"{kind}（最大 {t}、太陽の{loc['frac'] * 100:.0f}%がかくれる）" if kind == "部分日食" else \
+                f"{kind}が見える（最大 {t}）"
+            if loc["alt"] < 0:
+                txt += "・最大のときは地平線の下"
+            return txt
+        if not loc.get("visible"):
+            return f"{place}では見えない（月が地平線の下）"
+        if loc.get("all"):
+            return f"全部見える（最大のとき月の高度 {loc['alt']:.0f}°）"
+        if loc.get("alt_start", 0) > 0 >= loc.get("alt_end", 0):
+            return "途中まで見える（食の途中で月が沈む）"
+        if loc.get("alt_start", 0) <= 0 < loc.get("alt_end", 0):
+            return "途中から見える（欠けたまま月が昇る）"
+        return "一部が見える"
+
+    def _show_eclipses(self):
+        if not eclipses.available():
+            QMessageBox.warning(self, "日食・月食", "日食・月食を探すには PyEphem（python3-ephem）が必要です。")
+            return
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            v = self.view
+            jd0 = astro.jd_now() - 1
+            found = eclipses.search(jd0, 15, v.lat, v.lon)
+        finally:
+            QApplication.restoreOverrideCursor()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"日食・月食（これから15年・観測地 {self.view.place}）")
+        dlg.resize(860, 560)
+        lay = QVBoxLayout(dlg)
+        only = QCheckBox(f"{self.view.place}で見えるものだけ")
+        lay.addWidget(only)
+        tbl = QTableWidget(0, 4)
+        tbl.setHorizontalHeaderLabels(["日時（最大）", "種類", f"{self.view.place}での見え方", "食分"])
+        tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        tbl.setSelectionMode(QAbstractItemView.SingleSelection)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.verticalHeader().setVisible(False)
+        tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        lay.addWidget(tbl, 1)
+        note = QLabel("日時は地球全体で食がいちばん大きくなるとき（このパソコンの時刻帯）。時刻は数分ずれることがあります。\n"
+                      "「宇宙から見る」は影の様子を宇宙から、「地上から見る」は観測地から空を見上げます（▶ 再生で食が進みます）。\n"
+                      "※ 太陽を直接見ると目を傷めます。本物の日食は、必ず日食グラスなどで観察してください。")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        rows = []
+
+        def fill():
+            tbl.setRowCount(0)
+            rows.clear()
+            for e in found:
+                if only.isChecked() and not e.local.get("visible"):
+                    continue
+                r = tbl.rowCount()
+                tbl.insertRow(r)
+                items = [self._local_time(e.jd_max), e.type_ja, self._eclipse_local_text(e),
+                         f"{e.magnitude:.3f}"]
+                for c, t in enumerate(items):
+                    it = QTableWidgetItem(t)
+                    if e.local.get("visible"):
+                        it.setForeground(QColor(120, 220, 140))
+                    tbl.setItem(r, c, it)
+                rows.append(e)
+            tbl.resizeColumnsToContents()
+            if rows:
+                tbl.selectRow(0)
+
+        only.toggled.connect(fill)
+        fill()
+        bb = QDialogButtonBox()
+        b_space = bb.addButton("宇宙から見る", QDialogButtonBox.ActionRole)
+        b_ground = bb.addButton("地上から見る", QDialogButtonBox.ActionRole)
+        bb.addButton("閉じる", QDialogButtonBox.RejectRole)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+
+        def current():
+            r = tbl.currentRow()
+            return rows[r] if 0 <= r < len(rows) else None
+
+        def go(ground):
+            e = current()
+            if e is None:
+                return
+            dlg.accept()
+            self._go_eclipse(e, ground)
+
+        b_space.clicked.connect(lambda: go(False))
+        b_ground.clicked.connect(lambda: go(True))
+        tbl.cellDoubleClicked.connect(lambda *_: go(False))
+        dlg.exec()
+
+    def _go_eclipse(self, e, ground):
+        v = self.view
+        self.stop_tour()
+        self.sl_mag.setValue(0)              # 実際の大きさでないと、影の位置関係が正しくならない
+        v.paused = True
+        if ground:
+            jd = e.local.get("jd", e.jd_max) if e.kind == "solar" else e.jd_max
+            v.set_jd(jd)
+            if not self.btn_ground.isChecked():
+                self.btn_ground.setChecked(True)
+            self.cb_speed.setCurrentIndex(1)     # 1分/秒
+            v.paused = True
+            ok = v.look_at("sun" if e.kind == "solar" else "moon")
+            v.g_fov = 3.0
+            if not ok:
+                self.statusBar().showMessage("そのとき、観測地では地平線の下です（地面を消すと見えます）", 8000)
+        else:
+            v.set_jd(e.jd_max)
+            if self.btn_ground.isChecked():
+                self.btn_ground.setChecked(False)
+            self.cb_speed.setCurrentIndex(2)     # 10分/秒
+            P = v.positions
+            if e.kind == "solar":
+                # 太陽の側から地球を見る（地球の昼の面に落ちた月の影が見える）
+                d = P["sun"] - P["earth"]
+                v.fly_to("earth", 0.00012, view_dir=d / np.linalg.norm(d))
+            else:
+                # 地球と月のあいだから、地球の影に入った月を見る
+                d = P["earth"] - P["moon"]
+                d = d / np.linalg.norm(d)
+                side = np.cross(d, [0.0, 0.0, 1.0])
+                side /= np.linalg.norm(side)
+                v.fly_to("moon", 0.00006, view_dir=(d * 0.97 + side * 0.25))
+        self._apply_speed()
+        v.paused = True
+        self._refresh_ui()
+        v.update()
 
     # ---------------------------------------------------------- 解説パネル
 

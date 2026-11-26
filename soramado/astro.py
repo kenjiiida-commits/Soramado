@@ -157,8 +157,28 @@ def orbit_path(name: str, jd: float, segments: int = 512) -> np.ndarray:
 
 # ---------------------------------------------------------------- 月
 
+try:
+    import ephem as _ephem
+except ImportError:  # pragma: no cover
+    _ephem = None
+
+
 def moon_geocentric(jd: float) -> np.ndarray:
-    """月の地心黄道座標（J2000）[AU]。精度は数分角程度。"""
+    """月の地心黄道座標（J2000）[AU]。
+
+    PyEphem があればその月の理論（精度は数秒角）を使う。日食・月食をきちんと見せるため。
+    なければ下の簡易式（精度は数分角程度）。
+    """
+    if _ephem is not None:
+        m = _ephem.Moon(_ephem.Date(jd - 2415020.0))
+        ra, dec, r = float(m.a_ra), float(m.a_dec), float(m.earth_distance)
+        v = np.array([math.cos(dec) * math.cos(ra), math.cos(dec) * math.sin(ra), math.sin(dec)]) * r
+        return equatorial_to_ecliptic(v)
+    return moon_geocentric_simple(jd)
+
+
+def moon_geocentric_simple(jd: float) -> np.ndarray:
+    """月の地心黄道座標（J2000）[AU]。簡易式で、精度は数分角程度。"""
     d = jd - 2451543.5
     rad = math.radians
     node = rad(125.1228 - 0.0529538083 * d)
