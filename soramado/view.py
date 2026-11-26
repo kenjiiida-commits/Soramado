@@ -243,7 +243,9 @@ class SpaceView(QOpenGLWidget):
         from PySide6.QtWidgets import QApplication
         QApplication.instance().aboutToQuit.connect(self._cleanup_gl)
 
+        self.gl_error = ""
         self.recording = False
+        self._idle_frames = 0
         self._vclock = 0.0
         self._on_frame = None
 
@@ -478,6 +480,10 @@ class SpaceView(QOpenGLWidget):
 
     # ---------------------------------------------------------- 時間
 
+    def update(self):
+        self._idle_frames = 0
+        super().update()
+
     def now(self) -> float:
         """アニメーションの時計。録画中は「1コマ = 1/30秒」で進む仮想の時計になる。"""
         return self._vclock if self.recording else time.monotonic()
@@ -523,8 +529,10 @@ class SpaceView(QOpenGLWidget):
         if self.recording and self._on_frame:
             # 1コマずつ確実に描いて、録画に渡す
             self._on_frame(self.grabFramebuffer())
-        else:
-            self.update()
+        elif not self.paused or self._fly or self._idle_frames < 2:
+            QOpenGLWidget.update(self)
+            self._idle_frames = 0 if (not self.paused or self._fly) else self._idle_frames + 1
+        # 時間が止まっていて何も動いていないときは描き直さない（パソコンの負担を減らす）
 
     def _refresh_positions(self):
         self.positions = sbs.add_positions(sats.add_positions(astro.all_positions(self.jd), self.jd), self.jd)
@@ -534,6 +542,17 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- OpenGL
 
     def initializeGL(self):
+        fmt = self.context().format()
+        if (fmt.majorVersion(), fmt.minorVersion()) < (3, 3):
+            self.gl_error = (f"このパソコンの OpenGL は {fmt.majorVersion()}.{fmt.minorVersion()} です。"
+                             "そらみ窓には OpenGL 3.3 以上が必要です。グラフィックのドライバーを確認してください。")
+            return
+        try:
+            self._init_gl()
+        except Exception as exc:  # noqa: BLE001
+            self.gl_error = f"3D 描画の準備に失敗しました。\n\n{exc}"
+
+    def _init_gl(self):
         f = self.context().functions()
         f.glClearColor(0.0, 0.0, 0.0, 1.0)
 
@@ -579,7 +598,7 @@ class SpaceView(QOpenGLWidget):
         self.context().aboutToBeDestroyed.connect(self._cleanup_gl)
 
     def _cleanup_gl(self):
-        if not getattr(self, "tex", None) or self.context() is None:
+        if self.gl_error or not getattr(self, "tex", None) or self.context() is None:
             return
         self.makeCurrent()
         for t in self.tex.values():
@@ -589,7 +608,7 @@ class SpaceView(QOpenGLWidget):
 
     def reload_textures(self):
         """画像を読み込み直す（ダウンロード後に呼ぶ）。"""
-        if self.context() is None:
+        if self.context() is None or self.gl_error:
             return
         self.makeCurrent()
         self._load_textures()
@@ -638,7 +657,7 @@ class SpaceView(QOpenGLWidget):
 
     def reload_quasars(self):
         """ダウンロードが終わったら呼ぶ。"""
-        if self.context() is None:
+        if self.context() is None or self.gl_error:
             return
         self.makeCurrent()
         self._load_quasars()
@@ -731,6 +750,8 @@ class SpaceView(QOpenGLWidget):
             if g.kind == "milkyway":
                 # 太陽系のすぐ近くでは天の川銀河の模式図は出さない（本物の星を見せる）
                 fade = _smooth(3 * LY_AU, 300 * LY_AU, self._sun_far)
+            elif self._sun_far < 0.5 * LY_AU:
+                continue          # 太陽系の中からは、よその銀河の模式図は小さすぎて見えないので描かない
             if fade <= 0.01:
                 continue
             # 列ベクトルが銀河の軸。kpc の局所座標を AU に直す行列
@@ -777,6 +798,8 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue1f("u_fcoef", float(1.0 / math.log2(FAR_AU * LOGC + 1.0)))
 
     def paintGL(self):
+        if self.gl_error:
+            return
         f = self.context().functions()
         if self._orbit_dirty:
             self._rebuild_orbits()
@@ -860,8 +883,10 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1f("u_focal", float(focal))
             # 太陽系の中から見るときは、遠くの銀河は暗すぎて見えないので出さない
             crowd = min(1.0, 1.5e9 * LY_AU / max(sun_far, 1.0))
-            p.setUniformValue1f("u_gain", float(0.7 * _smooth(30 * LY_AU, 3000 * LY_AU, sun_far) * crowd))
-            self.m_gcat.draw(f)
+            gain = 0.7 * _smooth(30 * LY_AU, 3000 * LY_AU, sun_far) * crowd
+            p.setUniformValue1f("u_gain", float(gain))
+            if gain > 0.005:
+                self.m_gcat.draw(f)
             p.release()
         if self.show_con_lines and self._con_fade > 0.01:
             p = self.p_line

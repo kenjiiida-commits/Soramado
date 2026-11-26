@@ -91,7 +91,7 @@ def _fmt_dist(au: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("そらみ窓")
+        self.setWindowTitle(f"そらみ窓 {__version__}")
         self.resize(1280, 800)
         self.settings = QSettings("Soramado", "Soramado")
 
@@ -132,11 +132,14 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(600, self._maybe_offer_download)
         self._restore_place()
+        self._restore_settings()
+        QTimer.singleShot(400, self._check_gl)
 
     # ---------------------------------------------------------- 画面の部品
 
     def _build_toolbar(self):
         tb = QToolBar("操作")
+        tb.setObjectName("toolbar")
         tb.setMovable(False)
         self.addToolBar(tb)
 
@@ -321,7 +324,11 @@ class MainWindow(QMainWindow):
         m_tour.addAction(act_stop)
 
         m_help = mb.addMenu("ヘルプ(&H)")
-        act_howto = QAction("操作方法", self)
+        act_manual = QAction("説明書", self)
+        act_manual.setShortcut(QKeySequence("F1"))
+        act_manual.triggered.connect(self._show_manual)
+        m_help.addAction(act_manual)
+        act_howto = QAction("操作方法（早見表）", self)
         act_howto.triggered.connect(lambda: QMessageBox.information(self, "操作方法", HELP_TEXT))
         m_help.addAction(act_howto)
         act_about = QAction("そらみ窓について", self)
@@ -329,6 +336,69 @@ class MainWindow(QMainWindow):
         m_help.addAction(act_about)
 
     # ---------------------------------------------------------- 動作
+
+    # ---------------------------------------------------------- 設定の保存と復元
+
+    _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb")
+
+    def _restore_settings(self):
+        st = self.settings
+        geo = st.value("window/geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        state = st.value("window/state")
+        if state is not None:
+            self.restoreState(state)
+        acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
+                "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
+                "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb}
+        for name, act in acts.items():
+            val = st.value(f"view/{name}")
+            if val is not None:
+                act.setChecked(str(val).lower() in ("true", "1"))
+        if st.value("view/limit") is not None:
+            self.sl_stars.setValue(int(st.value("view/limit")))
+        if st.value("view/magnify") is not None:
+            self.sl_mag.setValue(int(st.value("view/magnify")))
+        if st.value("time/speed") is not None:
+            self.cb_speed.setCurrentIndex(int(st.value("time/speed")))
+        target = st.value("view/target")
+        if target and (target in BY_KEY or target in gx.BY_KEY):
+            self.view.set_target(target, fly=False)
+
+    def _save_settings(self):
+        st = self.settings
+        st.setValue("window/geometry", self.saveGeometry())
+        st.setValue("window/state", self.saveState())
+        for name in self._VIEW_FLAGS:
+            st.setValue(f"view/{name}", bool(getattr(self.view, name)))
+        st.setValue("view/limit", self.sl_stars.value())
+        st.setValue("view/magnify", self.sl_mag.value())
+        st.setValue("time/speed", self.cb_speed.currentIndex())
+        if not self.view.ground:
+            st.setValue("view/target", self.view.target)
+
+    def _check_gl(self):
+        if self.view.gl_error:
+            QMessageBox.critical(self, "そらみ窓", self.view.gl_error)
+
+    def _show_manual(self):
+        from pathlib import Path
+        dlg = QDialog(self)
+        dlg.setWindowTitle("そらみ窓 説明書")
+        dlg.resize(760, 640)
+        lay = QVBoxLayout(dlg)
+        tb = QTextBrowser()
+        tb.setOpenExternalLinks(True)
+        path = Path(__file__).parent / "manual.md"
+        tb.setMarkdown(path.read_text(encoding="utf-8") if path.is_file() else "説明書が見つかりません。")
+        lay.addWidget(tb)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.exec()
 
     # ---------------------------------------------------------- 画像・動画
 
@@ -900,6 +970,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         if self.btn_rec.isChecked():
             self.btn_rec.setChecked(False)
+        self._save_settings()
         if self._download:
             worker, timer, _ = self._download
             timer.stop()
