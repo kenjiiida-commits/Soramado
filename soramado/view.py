@@ -17,6 +17,7 @@ from .stars import StarCatalog
 from . import galaxies as gx
 from .galaxy_catalog import GalaxyCatalog
 from . import satellites as sats
+from . import smallbodies as sbs
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -208,6 +209,7 @@ class SpaceView(QOpenGLWidget):
         self.limit_mag = 6.5
         self.selected_star = -1
         self.show_galaxies = True
+        self.show_small = True
         self.gcat = GalaxyCatalog()
 
         # 地上モード（プラネタリウム）
@@ -228,7 +230,7 @@ class SpaceView(QOpenGLWidget):
         self._fly = None          # 移動中の情報
         self._drag = None
 
-        self.positions = sats.add_positions(astro.all_positions(self.jd), self.jd)
+        self.positions = sbs.add_positions(sats.add_positions(astro.all_positions(self.jd), self.jd), self.jd)
         self._orbit_jd = None
         self._screen = {}         # 天体の画面上の位置（ラベル・選択用）
 
@@ -449,7 +451,7 @@ class SpaceView(QOpenGLWidget):
         self.update()
 
     def _refresh_positions(self):
-        self.positions = sats.add_positions(astro.all_positions(self.jd), self.jd)
+        self.positions = sbs.add_positions(sats.add_positions(astro.all_positions(self.jd), self.jd), self.jd)
         if self._orbit_jd is None or abs(self.jd - self._orbit_jd) > 30:
             self._orbit_dirty = True
 
@@ -540,7 +542,7 @@ class SpaceView(QOpenGLWidget):
             self.tex["saturn:ring"] = make(textures.procedural_ring(), repeat=False)
 
     def _rebuild_orbits(self):
-        for key in ("mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune"):
+        for key in ("mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune", "pluto"):
             b = BY_KEY[key]
             pts = astro.orbit_path(b.orbit, self.jd, 2048)
             if key in self.m_orbits:
@@ -548,6 +550,9 @@ class SpaceView(QOpenGLWidget):
             else:
                 self.m_orbits[key] = _Mesh(pts, [(0, 3)], GL_LINE_STRIP)
         self._rebuild_moon_orbit()
+        for sb in sbs.SMALL_BODIES:
+            if sb.key not in self.m_orbits:
+                self.m_orbits[sb.key] = _Mesh(sbs.orbit_path(sb), [(0, 3)], GL_LINE_STRIP)
         if not hasattr(self, "_sat_orbit_jd"):
             self._rebuild_sat_orbits()
         self._orbit_jd = self.jd
@@ -756,6 +761,8 @@ class SpaceView(QOpenGLWidget):
         for b in BODIES:
             if self.ground and b.key == "earth":
                 continue          # 地上モードでは自分の立っている地球は描かない
+            if self._is_small(b.key) and (self.ground or not self.show_small):
+                continue
             r = self.display_radius(b.key)
             pos = rel[b.key]
             d = np.linalg.norm(pos)
@@ -825,6 +832,10 @@ class SpaceView(QOpenGLWidget):
                     if (abs(self.jd - self._moon_orbit_jd) > 1.0
                             and time.monotonic() - self._moon_orbit_at > 0.2):
                         self._rebuild_moon_orbit()
+                elif key in sbs.BY_KEY or key == "pluto":
+                    if not self.show_small:
+                        continue
+                    offset, scale = sun_rel, 1.0
                 elif key in sats.BY_KEY:
                     st = sats.BY_KEY[key]
                     scale = self.sat_scale(st.parent)
@@ -838,7 +849,8 @@ class SpaceView(QOpenGLWidget):
                         self._rebuild_sat_orbits()
                 else:
                     offset, scale = sun_rel, 1.0
-                alpha = 0.8 if key == self.target else (0.35 if key in sats.BY_KEY else 0.5)
+                alpha = 0.8 if key == self.target else (0.35 if (key in sats.BY_KEY or key in sbs.BY_KEY)
+                                                         else 0.5)
                 # 天体のすぐ近くでは、その天体の軌道線が手前を横切って邪魔なので薄くする
                 for k2 in ((key,) if key != "earth" else ("earth", "moon")):
                     near = np.linalg.norm(rel[k2]) / (self.display_radius(k2) * 300.0)
@@ -912,6 +924,8 @@ class SpaceView(QOpenGLWidget):
                 continue          # 太陽系から遠く離れると惑星は太陽に重なるので出さない
             if self.ground and (b.key == "earth" or not self._above(rel[b.key], margin=0.01)):
                 continue          # 地平線の下の天体は見えない
+            if self._is_small(b.key) and (self.ground or not self.show_small):
+                continue          # 小天体は暗いので、地上からは出さない
             pr = self._project(rel[b.key], viewproj, w, h)
             if pr is None:
                 continue
@@ -946,9 +960,40 @@ class SpaceView(QOpenGLWidget):
             self._draw_compass(painter, viewproj, w, h, placed, fm)
         else:
             self._draw_galaxy_labels(painter, viewproj, w, h, placed, fm, focal)
+        if self.show_small and not self.ground and not far:
+            self._draw_comet_tails(painter, rel, viewproj, w, h)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
         painter.end()
+
+    @staticmethod
+    def _is_small(key: str) -> bool:
+        return key == "pluto" or key in sbs.BY_KEY
+
+    def _draw_comet_tails(self, painter, rel, viewproj, w, h):
+        """彗星の尾（太陽と反対向き）。太陽に近いほど長く明るい。"""
+        from PySide6.QtGui import QLinearGradient
+        for sb in sbs.SMALL_BODIES:
+            if sb.kind != "comet":
+                continue
+            r = float(np.linalg.norm(self.positions[sb.key]))
+            if r > 4.0:
+                continue
+            k = min(1.0, (4.0 - r) / 3.0)
+            anti = self.positions[sb.key] / r
+            length = min(0.5, 0.12 / max(r * r, 0.05)) * (0.4 + 0.6 * k)
+            p0 = self._project(rel[sb.key], viewproj, w, h)
+            p1 = self._project(rel[sb.key] + anti * length, viewproj, w, h)
+            if not p0 or not p1:
+                continue
+            grad = QLinearGradient(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
+            grad.setColorAt(0.0, QColor(200, 225, 255, int(200 * k)))
+            grad.setColorAt(1.0, QColor(120, 170, 255, 0))
+            painter.setPen(QPen(grad, 2.5 + 3 * k, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(220, 235, 255, int(150 * k)))
+            painter.drawEllipse(QPointF(p0[0], p0[1]), 3 + 2 * k, 3 + 2 * k)
 
     def _above(self, direction, margin=0.0) -> bool:
         """地上モードで、その方向が地平線より上か。"""

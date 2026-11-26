@@ -62,6 +62,18 @@ def _add_satellites():
 
 _add_satellites()
 
+
+def _add_small_bodies():
+    from .smallbodies import SMALL_BODIES
+    # 冥王星（IAU 2015 の自転軸）
+    BODIES.append(Body("pluto", "冥王星", 1188.3, (0.85, 0.75, 0.65), 132.993, -6.163, 302.695, -56.3625225,
+                       "pluto"))
+    for b in SMALL_BODIES:
+        BODIES.append(Body(b.key, b.name, b.diameter_km / 2, b.color, 0.0, 90.0, 0.0, 360.0 / 0.4, "small"))
+
+
+_add_small_bodies()
+
 BY_KEY = {b.key: b for b in BODIES}
 
 # 画像ファイルの入手先（Solar System Scope、CC BY 4.0）

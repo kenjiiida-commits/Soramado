@@ -128,8 +128,18 @@ def procedural(key: str, w: int = 512, h: int = 256) -> QImage:
         from .satellites import BY_KEY as SAT
         c = np.array(SAT[key].color)
         rgb = _mix(c * 0.6, np.minimum(c * 1.15, 1.0), n)
+    elif key == "pluto":
+        rgb = _mix((0.55, 0.40, 0.30), (0.95, 0.88, 0.80), n)
+        heart = np.clip((0.25 - np.hypot(np.repeat(np.linspace(-1, 1, w)[None, :], h, axis=0) - 0.0,
+                                          lat - 0.1)) * 8, 0, 1)
+        rgb = _mix(rgb, (0.98, 0.95, 0.92), heart)     # 「ハート」と呼ばれる明るい平原
     else:
-        rgb = np.full((h, w, 3), 0.6)
+        from .smallbodies import BY_KEY as SB
+        if key in SB:
+            c = np.array(SB[key].color)
+            rgb = _mix(c * 0.55, np.minimum(c * 1.1, 1.0), n)
+        else:
+            rgb = np.full((h, w, 3), 0.6)
     return _to_image(rgb)
 
 

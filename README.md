@@ -19,6 +19,7 @@ Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
 - ホイールでどこまでも引いていける（v0.3）：太陽系 → 近くの恒星 → 天の川銀河 → 近くの銀河（約24億光年まで）。左下に画面の横幅（km・AU・光年）を表示
 - 天の川銀河と近くの銀河12個（アンドロメダ銀河、大・小マゼラン雲、M81、ソンブレロ銀河、M87 など）。「見る天体」から選ぶと飛んでいける
 - 惑星の衛星 19個（v0.5）：火星のフォボス・ダイモス、木星のガリレオ衛星、土星のタイタンなど7個、天王星の5個、海王星のトリトン。実際の位置で公転し、「見る天体」から選べる。地上モードで木星を拡大すると、ガリレオ衛星が並んで見える
+- 準惑星・小惑星・彗星 13個（v0.6）：冥王星・エリス・マケマケ・ハウメア・ケレス、パラス・ベスタ、「はやぶさ」のイトカワ・「はやぶさ2」のリュウグウ・ベンヌ、ハレー彗星・エンケ彗星・チュリュモフ・ゲラシメンコ彗星。彗星は太陽に近づくと尾がのびる
 - 「🔭 地上から見る」で、観測地（大阪・東京・札幌など、または緯度・経度を入力）から見上げた星空を表示（v0.4、プラネタリウム）。昼の青空・夕焼け・薄明・夜の変化、地平線と方角、月の満ち欠け。ホイールで視野を1度まで拡大できる
 - 実在の銀河 約1万個（OpenNGC）を、本当の方向・距離・大きさ・向きで配置。数億光年まで引くと、おとめ座銀河団などの銀河の集まりが見える。ダブルクリックで飛んでいける
 
@@ -74,6 +75,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 惑星の位置は NASA JPL の近似軌道要素で計算しています。1800〜2050年の範囲で、地球から見た方向の誤差は水星〜火星で 0.01度程度、木星・土星で 0.2度以内です（`tests/test_astro.py` で astropy と比較）。範囲外の年は概算になります。
 - 月の位置は簡易式で、誤差は 0.05度程度です。
 - 衛星の位置は PyEphem（XEphem の衛星理論）で計算しています。トリトンだけは PyEphem にないので、NASA JPL の平均軌道要素によるおおよその位置です（`tests/test_satellites.py`）。
+- 小天体は軌道要素からケプラー運動で計算していて、惑星の引力による変化は入れていないので、おおよその位置です。冥王星は NASA JPL の近似式で、PyEphem と比べて 0.01度程度です（`tests/test_smallbodies.py`）。
 - 地上から見た高度・方位は、恒星時と歳差を計算しています（`tests/test_ground.py` で astropy と比較し、恒星で0.01度、月で0.1度程度）。大気による浮き上がり（大気差、地平線近くで約0.5度）は計算していません。
 - 恒星の方向は HYG データベースの J2000 の位置で、固有運動は計算していません（`tests/test_stars.py`）。
 - 銀河の位置（赤経・赤緯）・距離・大きさ・傾きは文献のおおよその値です。銀河の形は写真ではなく、粒子で作った模式図です。天の川銀河は、太陽から中心まで 8.2 kpc（約2.7万光年）、4本の渦巻き腕と棒状構造をもつ形にしています。
@@ -81,7 +83,6 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 
 ## 今後の予定
 
-- 小惑星・準惑星・彗星
 - 天体の解説、宇宙を巡るツアー
 
 ## 使用しているデータとライセンス
@@ -90,6 +91,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 惑星の軌道: [NASA JPL, Approximate Positions of the Planets](https://ssd.jpl.nasa.gov/planets/approx_pos.html)
 - 月の位置: Paul Schlyter, *How to compute planetary positions*
 - 天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）
+- 小天体の軌道要素: 冥王星は NASA JPL の Table 1、その他は Wikipedia の各天体の記事（JPL Small-Body Database などが出典）
 - 衛星の位置: [PyEphem](https://rhodesmill.org/pyephem/)（MIT ライセンス、別途インストール）、トリトンは [NASA JPL Planetary Satellite Mean Elements](https://ssd.jpl.nasa.gov/sats/elem/)
 - 恒星: [HYG データベース v4.1](https://github.com/astronexus/HYG-Database)（CC BY-SA 4.0）。変換したデータ `soramado/data/stars.npz` も CC BY-SA 4.0 です
 - 銀河カタログ: [OpenNGC](https://github.com/mattiaverga/OpenNGC)（CC BY-SA 4.0）。変換したデータ `soramado/data/galaxies.npz` も CC BY-SA 4.0 です

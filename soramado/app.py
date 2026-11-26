@@ -18,6 +18,7 @@ from . import __version__, astro, textures
 from .bodies import BODIES, BY_KEY
 from .view import SpaceView, format_length
 from . import galaxies as gx
+from . import smallbodies as sbs
 
 SPEEDS = [
     ("実時間", 1.0),
@@ -44,6 +45,8 @@ TARGET_ORDER = ["sun", "mercury", "venus", "earth", "moon",
                 "saturn", "mimas", "enceladus", "tethys", "dione", "rhea", "titan", "iapetus",
                 "uranus", "miranda", "ariel", "umbriel", "titania", "oberon",
                 "neptune", "triton"]
+SMALL_ORDER = ["pluto", "eris", "makemake", "haumea", "ceres", "pallas", "vesta",
+               "itokawa", "ryugu", "bennu", "halley", "encke", "67p"]
 
 HELP_TEXT = """<h3>操作方法</h3>
 <table cellpadding="3">
@@ -115,6 +118,9 @@ class MainWindow(QMainWindow):
             par = BY_KEY[key].parent
             # 衛星は字下げして、どの惑星の衛星か分かるようにする
             self.cb_target.addItem(("　" + BY_KEY[key].name) if par not in ("sun", "") else BY_KEY[key].name, key)
+        self.cb_target.insertSeparator(self.cb_target.count())
+        for key in SMALL_ORDER:
+            self.cb_target.addItem(BY_KEY[key].name, key)
         self.cb_target.insertSeparator(self.cb_target.count())
         for g in gx.GALAXIES:
             if g.in_menu:
@@ -229,6 +235,7 @@ class MainWindow(QMainWindow):
         self.act_conn = self._toggle(m_view, "星座名", "show_con_names")
         self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
         self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
+        self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
         m_view.addSeparator()
         act_full = QAction("全画面表示", self, checkable=True)
         act_full.setShortcut(QKeySequence("F11"))
@@ -406,6 +413,20 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         b = BY_KEY[key]
+        if key in sbs.BY_KEY or key == "pluto":
+            sb = sbs.BY_KEY.get(key)
+            kind = sbs.KIND_JA[sb.kind] if sb else "準惑星"
+            dia = b.radius_km * 2
+            parts = [f"<b>{b.name}</b>", kind,
+                     f"直径 約{dia:,.0f} km" if dia >= 10 else f"直径 約{dia * 1000:,.0f} m",
+                     f"太陽から {_fmt_dist(np.linalg.norm(v.positions[key]))}",
+                     f"地球から {_fmt_dist(np.linalg.norm(v.positions[key] - v.positions['earth']))}"]
+            if sb and sb.note:
+                parts.append(sb.note)
+            parts.append("※ 位置はおおよそ")
+            self.status_info.setText("　｜　".join(parts))
+            self._refresh_warn(v)
+            return
         parts = [f"<b>{b.name}</b>", f"半径 {b.radius_km:,.0f} km"]
         if b.parent not in ("sun", ""):
             par = BY_KEY[b.parent]
@@ -500,6 +521,7 @@ class MainWindow(QMainWindow):
             "・惑星の軌道: NASA JPL「Approximate Positions of the Planets」<br>"
             "・月の位置: Paul Schlyter「How to compute planetary positions」<br>"
             "・衛星の位置: PyEphem（トリトンは NASA JPL の平均軌道要素）<br>"
+            "・小天体の軌道: 冥王星は NASA JPL、その他は Wikipedia 各記事の軌道要素（JPL などが出典）<br>"
             "・天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）<br>"
             "・恒星: HYG データベース v4.1（CC BY-SA 4.0）<br>"
             "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"
