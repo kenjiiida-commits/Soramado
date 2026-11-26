@@ -259,8 +259,11 @@ def build(now_local: datetime, lat: float, lon: float, cat=None, seasons=None, a
     if artsats:
         from . import artsat
         for s in artsats:
-            if s.featured:
-                g.passes += [p for p in artsat.passes(s, lat, lon, a, b - a) if p.visible]
+            if s.featured and artsat.usable(s, a):
+                try:
+                    g.passes += [p for p in artsat.passes(s, lat, lon, a, b - a) if p.visible]
+                except ValueError:
+                    pass
         g.passes.sort(key=lambda p: p.rise_jd)
     if with_events:
         g.showers = [n for n in events.shower_nights(a - 4, 8, lat, lon)

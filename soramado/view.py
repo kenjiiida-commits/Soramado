@@ -582,7 +582,10 @@ class SpaceView(QOpenGLWidget):
         if key in crafts.BY_KEY:
             return self.craft_pos(key)
         if key.startswith("s:"):
-            return self.positions["earth"] + artsat.offset(self.artsats[int(key[2:])], self.jd)
+            sa = self.artsats[int(key[2:])]
+            if not artsat.usable(sa, self.jd):
+                return self.positions["earth"].copy()
+            return self.positions["earth"] + artsat.offset(sa, self.jd)
         if key.startswith("n:"):
             return neb.NEBULAE[int(key[2:])].pos
         if key.startswith("x:"):
@@ -2014,6 +2017,13 @@ class SpaceView(QOpenGLWidget):
 
     def _draw_overlay(self, rel, viewproj, w, h):
         painter = QPainter(self)
+        try:
+            self._draw_overlay_body(painter, rel, viewproj, w, h)
+        finally:
+            if painter.isActive():          # 途中で失敗しても、描き終えておかないとアプリが落ちる
+                painter.end()
+
+    def _draw_overlay_body(self, painter, rel, viewproj, w, h):
         painter.setRenderHint(QPainter.Antialiasing)
         font = QFont()
         font.setPointSizeF(10.5)
@@ -2332,7 +2342,12 @@ class SpaceView(QOpenGLWidget):
             dark = self._night > 0.5
             off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
             for i, s in enumerate(self.artsats):
-                alt, az, lit = artsat.topo(s, self.jd, self.lat, self.lon)
+                if not artsat.usable(s, self.jd):
+                    continue
+                try:
+                    alt, az, lit = artsat.topo(s, self.jd, self.lat, self.lon)
+                except ValueError:
+                    continue
                 if alt <= 0:
                     continue
                 a, z = math.radians(alt), math.radians(az)
@@ -2361,7 +2376,7 @@ class SpaceView(QOpenGLWidget):
         tgt = int(self.target[2:]) if self.is_artsat(self.target) else -1
         if tgt >= 0:
             # 選んでいる衛星の軌道（1周ぶん）
-            pts = artsat.orbit_path(self.artsats[tgt], self.jd, 90)
+            pts = artsat.orbit_path(self.artsats[tgt], self.jd, 90) if artsat.usable(self.artsats[tgt], self.jd) else []
             prev = None
             painter.setPen(QPen(QColor(120, 220, 255, 150), 1.2))
             for o in pts:
@@ -2370,6 +2385,8 @@ class SpaceView(QOpenGLWidget):
                     painter.drawLine(QPointF(prev[0], prev[1]), QPointF(q[0], q[1]))
                 prev = q if (q and not self._behind_earth(earth + o, earth, er)) else None
         for i, s in enumerate(self.artsats):
+            if not artsat.usable(s, self.jd):
+                continue
             pos = earth + artsat.offset(s, self.jd)
             if self._behind_earth(pos, earth, er):
                 continue

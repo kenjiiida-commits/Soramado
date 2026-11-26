@@ -106,6 +106,14 @@ def load() -> list[ArtSat]:
         return []
 
 
+USABLE_DAYS = 60.0           # 軌道要素（TLE）が使える、作られた日からの日数のめやす
+
+
+def usable(s: ArtSat, jd: float) -> bool:
+    """その日の位置を、この軌道要素で計算してよいか（何年も離れた日は計算できない）。"""
+    return abs(jd - s.epoch_jd) <= USABLE_DAYS
+
+
 def offset(s: ArtSat, jd: float) -> np.ndarray:
     """地球の中心から衛星までのベクトル（J2000 黄道座標）[AU]。"""
     s.body.compute(ephem.Date(jd - DJD))
