@@ -860,7 +860,8 @@ class SpaceView(QOpenGLWidget):
         for b in BODIES:
             img = textures.load_image(b.texture)
             self.downloaded[b.key] = img is not None
-            self.tex[b.key] = make(img if img is not None else textures.procedural(b.key))
+            self.tex[b.key] = make(img if img is not None
+                                   else textures.cached(f"body_{b.key}", lambda k=b.key: textures.procedural(k)))
             for kind, fname in b.extra.items():
                 img = textures.load_image(fname)
                 if img is not None:
@@ -872,7 +873,7 @@ class SpaceView(QOpenGLWidget):
         if "neptune:ring" not in self.tex:
             self.tex["neptune:ring"] = make(textures.procedural_ring_neptune(), repeat=False)
         if "cmb" not in self.tex:
-            self.tex["cmb"] = make(cosmos.cmb_texture())
+            self.tex["cmb"] = make(textures.cached("cmb", cosmos.cmb_texture))
 
     def _load_quasars(self):
         q = cosmos.load_quasars()

@@ -251,3 +251,31 @@ class TextureDownloader:
                 self.failed.append(name)
         self.index, self.current = self.total, ""
         self.done = True
+
+
+# ---------------------------------------------------------------- 作った模様の保存（起動を速くする）
+CACHE_VER = 1                  # 模様の作り方を変えたら上げる（古い保存を使わないように）
+
+
+def cache_dir():
+    from pathlib import Path
+    import os
+    base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return base / "soramado" / f"tex{CACHE_VER}"
+
+
+def cached(name: str, make):
+    """計算で作る模様を、一度作ったら保存しておき、次からはそれを読む。"""
+    path = cache_dir() / f"{name}.png"
+    if path.is_file():
+        img = QImage(str(path))
+        if not img.isNull():
+            return img
+    img = make()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(str(path), "PNG")
+    except OSError:
+        pass
+    return img
+
