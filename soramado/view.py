@@ -812,8 +812,9 @@ class SpaceView(QOpenGLWidget):
             items.append((prio, key, n, pr[0], pr[1], r_px))
         items.sort(key=lambda t: t[0])
         shown = 0
+        limit = 5 if self.is_neb(self.target) else 18     # 星雲・星団を見ているときは、名前を少なめに
         for _p, key, n, x, y, r_px in items:
-            if shown >= 18 and key != self.target:
+            if shown >= limit and key != self.target:
                 break
             if r_px < 3 and not n.note and key != self.target and self._sun_far < 50 * LY_AU:
                 continue                      # 太陽系の近くからは、有名なものだけ名前を出す
