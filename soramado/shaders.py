@@ -667,3 +667,38 @@ void main() {
     frag = vec4(texture(u_tex, uv).rgb * (u_gain * m), 1.0);
 }
 """
+
+
+# ---------------------------------------------------------------- 天の川の全天写真（太陽系の近くから見た空）
+MWSKY_VS = """#version 330 core
+layout(location=0) in vec2 a_pos;
+out vec2 v_ndc;
+void main() {
+    v_ndc = a_pos;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+"""
+
+MWSKY_FS = """#version 330 core
+in vec2 v_ndc;
+uniform mat4 u_inv;          // 画面 → 方向（カメラ原点の座標）
+uniform mat3 u_ecl2eq;       // 黄道座標 → 赤道座標
+uniform sampler2D u_tex;     // 正距円筒図（横 = 赤経、縦 = 赤緯 +90 → -90）
+uniform float u_gain;
+out vec4 frag;
+const float PI = 3.14159265358979;
+void main() {
+    vec4 p = u_inv * vec4(v_ndc, 0.0, 1.0);
+    vec3 d = normalize(u_ecl2eq * (p.xyz / p.w));
+    float ra = atan(d.y, d.x);                       // -π〜π
+    float u1 = ra / (2.0 * PI);
+    float u0 = fract(u1);                            // 0〜1（赤経 0h で切れ目）
+    float v = acos(clamp(d.z, -1.0, 1.0)) / PI;      // 0 = 北極
+    // 赤経 0h の切れ目で、ミップマップがおかしくならないように微分を選ぶ
+    vec2 dx0 = vec2(dFdx(u0), dFdx(v)), dy0 = vec2(dFdy(u0), dFdy(v));
+    vec2 dx1 = vec2(dFdx(u1), dFdx(v)), dy1 = vec2(dFdy(u1), dFdy(v));
+    bool use1 = abs(dx1.x) + abs(dy1.x) < abs(dx0.x) + abs(dy0.x);
+    vec3 c = textureGrad(u_tex, vec2(u0, v), use1 ? dx1 : dx0, use1 ? dy1 : dy0).rgb;
+    frag = vec4(c * u_gain, 1.0);
+}
+"""

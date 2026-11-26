@@ -28,6 +28,7 @@ from . import nebulae as neb
 from . import events as ev
 from . import artsat
 from . import dsoimages
+from . import skyphoto
 from .i18n import EN_MODE, tr, trx
 from .bodies import BODIES, BY_KEY
 
@@ -54,6 +55,9 @@ GL_TEXTURE0 = 0x84C0
 GL_TEXTURE_2D = 0x0DE1
 GLOW_EXPOSURE = 1.3          # 星雲・銀河の明るさ（圧縮する前にかける倍率）
 PHOTO_GAIN = 0.85            # 写真の明るさ
+_c, _s = math.cos(astro.OBLIQUITY_J2000), math.sin(astro.OBLIQUITY_J2000)
+ECL2EQ = np.array([[1.0, 0.0, 0.0], [0.0, _c, -_s], [0.0, _s, _c]])   # 黄道座標 → 赤道座標
+MW_GAIN = 0.4                # 天の川の写真の明るさ
 PHOTO_FLIP = 1               # 写真の上下（テクスチャの向き）
 
 FOV_DEG = 45.0
@@ -256,6 +260,8 @@ class SpaceView(QOpenGLWidget):
         self._sunlight_sky = 1.0
         self.show_nebulae = True
         self.show_photos = True
+        self.show_mwphoto = True
+        self._mw_w = 0.0               # 天の川の写真の濃さ（模式図の天の川銀河はその分だけ薄くする）
         self._photo_w = {}             # 天体ごとの写真の濃さ（0〜1）。模式図はその分だけ薄くする
         self.reload_photos(gl=False)
         self.show_meteors = True
@@ -753,6 +759,8 @@ class SpaceView(QOpenGLWidget):
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
         self.p_tone = prog(shaders.TONE_VS, shaders.TONE_FS)
         self.p_photo = prog(shaders.PHOTO_VS, shaders.PHOTO_FS)
+        self.p_mwsky = prog(shaders.MWSKY_VS, shaders.MWSKY_FS)
+        self._mw_tex = None
         self.m_quad = _Mesh(np.array([[-1, -1], [1, -1], [-1, 1], [1, 1]], np.float32), [(0, 2)], GL_TRIANGLE_STRIP)
         self.m_full = _Mesh(np.array([[-1, -1], [3, -1], [-1, 3]], np.float32), [(0, 2)], GL_TRIANGLES)
         self._glow_fbo = None
@@ -1103,6 +1111,57 @@ class SpaceView(QOpenGLWidget):
         if any(e["big"] is None and e["small"] is None for k, e in self._ph.items() if k in self._photo_w):
             QTimer.singleShot(30, self.update)        # まだ読み込んでいない写真があれば、続けて描く
 
+    # ---------------------------------------------------------- 天の川の全天写真
+
+    def reload_mwphoto(self):
+        if self._mw_tex:
+            self.makeCurrent()
+            self._mw_tex.destroy()
+            self.doneCurrent()
+        self._mw_tex = None
+        self.update()
+
+    def has_mwphoto(self) -> bool:
+        return skyphoto.path().is_file()
+
+    def _mw_weight(self, sun_far) -> float:
+        """太陽系の近くほど濃く。数千光年離れると空の見え方が変わるので消す。"""
+        if not self.show_mwphoto or not self.has_mwphoto():
+            return 0.0
+        w = 1.0 - _smooth(200 * LY_AU, 4000 * LY_AU, sun_far)
+        if self.ground:
+            w *= self._night
+        return w
+
+    def _draw_mwsky(self, f, viewproj, w):
+        if w <= 0.005:
+            return
+        if self._mw_tex is None:
+            img = QImage(str(skyphoto.path()))
+            if img.isNull():
+                self._mw_tex = False
+                return
+            t = QOpenGLTexture(img.convertToFormat(QImage.Format.Format_RGBA8888))
+            t.setMinificationFilter(QOpenGLTexture.LinearMipMapLinear)
+            t.setMagnificationFilter(QOpenGLTexture.Linear)
+            t.setWrapMode(QOpenGLTexture.DirectionS, QOpenGLTexture.Repeat)
+            t.setWrapMode(QOpenGLTexture.DirectionT, QOpenGLTexture.ClampToEdge)
+            self._mw_tex = t
+        if not self._mw_tex:
+            return
+        p = self.p_mwsky
+        p.bind()
+        inv = np.linalg.inv(viewproj)
+        p.setUniformValue("u_inv", _qmat(inv))
+        p.setUniformValue("u_ecl2eq", QMatrix3x3([float(x) for x in ECL2EQ.reshape(-1)]))
+        p.setUniformValue1i("u_tex", 0)
+        p.setUniformValue1f("u_gain", float(w * MW_GAIN))
+        f.glActiveTexture(GL_TEXTURE0)
+        self._mw_tex.bind(0)
+        f.glDisable(GL_DEPTH_TEST)
+        self.m_full.draw(f)
+        p.release()
+
     def reload_exo(self):
         self.exo = exo.load()
         self._exo_orbits = {}
@@ -1426,6 +1485,8 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1f("u_floor", float(4.0 / g.n * (1.0 - _smooth(2.0, 10.0, r_px))))
             p.setUniformValue1f("u_k", float(g.k))
             fade *= 1.0 - 0.92 * self._photo_w.get(g.key, 0.0)
+            if g.kind == "milkyway":
+                fade *= 1.0 - 0.9 * self._mw_w
             p.setUniformValue1f("u_fade", float(fade))
             # 天の川銀河の中にいるときは、すぐ近くの粒（大きくぼやける）を出さず、遠くの帯だけを見せる
             p.setUniformValue1f("u_near", 2.5 if g.kind == "milkyway" else 0.0)
@@ -1541,6 +1602,9 @@ class SpaceView(QOpenGLWidget):
         f.glEnable(GL_BLEND)
         f.glBlendFunc(GL_ONE, GL_ONE)
         f.glEnable(GL_PROGRAM_POINT_SIZE)
+        self._mw_w = self._mw_weight(sun_far)
+        self._draw_mwsky(f, viewproj, self._mw_w)
+        f.glBlendFunc(GL_ONE, GL_ONE)
         if not self.ground:
             self._draw_far_universe(f, viewproj, eye, sun_rel, sun_far)
         self._update_photo_weights(eye, focal)

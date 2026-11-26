@@ -59,3 +59,14 @@ CDS（<https://alasky.cds.unistra.fr/DSS/DSSColor>）が配信している HiPS�
   grant NAG W-2166. The images of these surveys are based on photographic data obtained using the
   Oschin Schmidt Telescope on Palomar Mountain and the UK Schmidt Telescope.
   The plates were processed into the present compressed digital form with the permission of these institutions.
+
+## ダウンロードする天の川の写真（Gaia DR2 color flux map）
+
+「ファイル」→「天の川の写真（Gaia）をダウンロード…」で取得する画像は、ソフトには含まれていません。
+利用者のパソコンが CDS の HiPS「Gaia DR2 color flux map」の全天画像（Norder3/Allsky.jpg）を
+ダウンロードし、正距円筒図に並べ直して `~/.local/share/soramado/milkyway_gaia.jpg` に保存します。
+
+- データ: ESA/Gaia/DPAC（Gaia Data Release 2）。ライセンス: CC BY-SA 3.0 IGO
+- HiPS: CDS（ストラスブール天文データセンター）, T. Boch
+- This work has made use of data from the European Space Agency (ESA) mission Gaia
+  (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC).

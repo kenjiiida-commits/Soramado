@@ -32,6 +32,7 @@ from . import nebulae as neb
 from . import events as evt
 from . import artsat
 from . import dsoimages
+from . import skyphoto
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -316,6 +317,9 @@ class MainWindow(QMainWindow):
         act_ph = QAction(tr("星雲・銀河の写真をダウンロード…"), self)
         act_ph.triggered.connect(self._download_photos)
         m_file.addAction(act_ph)
+        act_mw = QAction(tr("天の川の写真（Gaia）をダウンロード…"), self)
+        act_mw.triggered.connect(self._download_mwphoto)
+        m_file.addAction(act_mw)
         m_file.addSeparator()
         act_quit = QAction(tr("終了"), self)
         act_quit.setShortcut(QKeySequence.Quit)
@@ -337,6 +341,7 @@ class MainWindow(QMainWindow):
         self.act_neb = self._toggle(m_view, tr("星雲・星団"), "show_nebulae")
         self.act_gal = self._toggle(m_view, tr("銀河"), "show_galaxies")
         self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
+        self.act_mwphoto = self._toggle(m_view, tr("天の川を写真で表示（ダウンロードしたもの）"), "show_mwphoto")
         self.act_small = self._toggle(m_view, tr("準惑星・小惑星・彗星"), "show_small")
         self.act_minor = self._toggle(m_view, tr("たくさんの小惑星・彗星（ダウンロードしたもの）"), "show_minor")
         self.act_exo = self._toggle(m_view, tr("系外惑星を持つ恒星（ダウンロードしたもの）"), "show_exo")
@@ -418,7 +423,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto")
 
     def _restore_settings(self):
         st = self.settings
@@ -431,7 +436,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
@@ -744,6 +749,48 @@ class MainWindow(QMainWindow):
 
         timer.timeout.connect(poll)
         self._ph_dl = (dl, timer, dlg)
+        dl.start()
+        timer.start(200)
+
+    def _download_mwphoto(self):
+        if getattr(self, "_mw_dl", None):
+            return
+        again = skyphoto.path().is_file()
+        ans = QMessageBox.question(
+            self, tr("天の川の写真"),
+            (tr("天の川の写真はダウンロード済みです。もう一度作り直しますか？\n\n") if again else "") +
+            tr("ESA の Gaia 衛星が測った約17億個の星の光から作られた、全天の地図（CDS が配信）をダウンロードして、"
+               "太陽系から見た空に天の川を表示します。\n\n通信量は約3MB です。よろしいですか？"))
+        if ans != QMessageBox.Yes:
+            return
+        dl = skyphoto.SkyDownloader()
+        dlg = QProgressDialog(tr("天の川の写真をダウンロードしています…"), tr("キャンセル"), 0, dl.total + 1, self)
+        dlg.setWindowTitle(tr("天の川の写真"))
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.canceled.connect(dl.cancel)
+        timer = QTimer(self)
+
+        def poll():
+            dlg.setValue(min(dl.finished, dl.total))
+            dlg.setLabelText(trx(f"天の川の写真をダウンロードしています…\n{dl.finished} / {dl.total}"
+                                 f"　（{dl.bytes / 1e6:,.1f} MB）") +
+                             (("\n" + tr("全天の画像に並べ直しています…")) if dl.finished >= dl.total else ""))
+            if not dl.done:
+                return
+            timer.stop()
+            dlg.close()
+            self._mw_dl = None
+            self.view.reload_mwphoto()
+            if dl.ok:
+                QMessageBox.information(self, tr("天の川の写真"), tr(
+                    "天の川の写真を用意しました。\n\n太陽系の近くから見た空と、「地上から見る」の夜空に天の川が出ます。\n"
+                    "「表示」→「天の川を写真で表示」で、出さないようにもできます。"))
+            elif "キャンセル" not in dl.message:
+                QMessageBox.warning(self, tr("天の川の写真"), tr("ダウンロードできませんでした。\n\n") + dl.message)
+
+        timer.timeout.connect(poll)
+        self._mw_dl = (dl, timer, dlg)
         dl.start()
         timer.start(200)
 
@@ -1794,6 +1841,8 @@ class MainWindow(QMainWindow):
             "・銀河: 位置・距離・大きさは文献のおおよその値。形は粒子で作った模式図<br>"
             "・銀河カタログ（約1万個）: OpenNGC（CC BY-SA 4.0）。距離は後退速度から推定<br>"
             "・星雲・星団: OpenNGC（CC BY-SA 4.0）の位置・大きさ。形は模式図<br>"
+            "・星雲・銀河の写真（ダウンロードしたとき）: DSS2 color（STScI・CDS、ESA ESASky から）<br>"
+            "・天の川の写真（ダウンロードしたとき）: ESA/Gaia/DPAC の Gaia DR2 から CDS が作った全天地図（CC BY-SA 3.0 IGO）<br>"
             "・流星群: 国際流星機構（IMO）の流星群カレンダーの代表値<br>"
             "・クエーサー（ダウンロードした場合）: SDSS DR16Q（Lyke et al. 2020）、VizieR VII/289<br>"
             "・小惑星・彗星（ダウンロードした場合）: NASA JPL Solar System Dynamics の軌道要素の表<br>"

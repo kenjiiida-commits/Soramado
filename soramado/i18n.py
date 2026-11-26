@@ -146,6 +146,7 @@ def tr(s: str) -> str:
 
 # 組み立てた文の言い回し（長いものから順に置きかえる）
 _PHRASES = [
+    ("天の川の写真をダウンロードしています…", "Downloading the Milky Way photo…"),
     ("星雲・銀河の写真をダウンロードしています…", "Downloading photos of nebulae & galaxies…"),
     ("個の天体の写真を用意しました。", " objects now have photos."),
     ("個はダウンロードできませんでした（もう一度実行すると、足りない分だけ取りに行きます）。",
@@ -299,6 +300,20 @@ EN.update({
     "You can turn photos off in View → Show nebulae & galaxies as photos.",
     "ダウンロードできませんでした。\n\n": "Download failed.\n\n",
     "写真（DSS2）と模式図": "Photo (DSS2) and model",
+    "天の川の写真（Gaia）をダウンロード…": "Download the Milky Way photo (Gaia)…",
+    "天の川を写真で表示（ダウンロードしたもの）": "Show the Milky Way photo (downloaded)",
+    "天の川の写真": "Milky Way photo",
+    "天の川の写真はダウンロード済みです。もう一度作り直しますか？\n\n": "The Milky Way photo is already downloaded. Make it again?\n\n",
+    "ESA の Gaia 衛星が測った約17億個の星の光から作られた、全天の地図（CDS が配信）をダウンロードして、"
+    "太陽系から見た空に天の川を表示します。\n\n通信量は約3MB です。よろしいですか？":
+    "Download an all-sky map made from the light of about 1.7 billion stars measured by ESA's Gaia satellite "
+    "(served by CDS), and show the Milky Way in the sky seen from the solar system.\n\nAbout 3 MB. Continue?",
+    "天の川の写真をダウンロードしています…": "Downloading the Milky Way photo…",
+    "全天の画像に並べ直しています…": "Building the all-sky image…",
+    "天の川の写真を用意しました。\n\n太陽系の近くから見た空と、「地上から見る」の夜空に天の川が出ます。\n"
+    "「表示」→「天の川を写真で表示」で、出さないようにもできます。":
+    "The Milky Way photo is ready.\n\nIt appears in the sky seen from near the solar system and in the night sky of \"View from ground\".\n"
+    "You can turn it off in View → Show the Milky Way photo.",
 })
 SHOWER_PARENTS_EN = {"qua": "Asteroid 2003 EH1", "lyr": "Comet Thatcher (C/1861 G1)", "eta": "Comet Halley",
                      "sda": "Comet 96P/Machholz", "per": "Comet 109P/Swift–Tuttle", "dra": "Comet 21P/Giacobini–Zinner",
