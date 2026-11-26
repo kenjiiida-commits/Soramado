@@ -57,7 +57,7 @@ GLOW_EXPOSURE = 1.3          # 星雲・銀河の明るさ（圧縮する前に�
 PHOTO_GAIN = 0.85            # 写真の明るさ
 _c, _s = math.cos(astro.OBLIQUITY_J2000), math.sin(astro.OBLIQUITY_J2000)
 ECL2EQ = np.array([[1.0, 0.0, 0.0], [0.0, _c, -_s], [0.0, _s, _c]])   # 黄道座標 → 赤道座標
-MW_GAIN = 0.4                # 天の川の写真の明るさ
+MW_GAINS = (0.25, 0.4, 0.65, 1.0)   # 天の川の写真の明るさ（控えめ・ふつう・明るめ・とても明るい）
 PHOTO_FLIP = 1               # 写真の上下（テクスチャの向き）
 
 FOV_DEG = 45.0
@@ -261,6 +261,7 @@ class SpaceView(QOpenGLWidget):
         self.show_nebulae = True
         self.show_photos = True
         self.show_mwphoto = True
+        self.mw_level = 2              # 天の川の明るさ（0 控えめ 〜 3 とても明るい）
         self._mw_w = 0.0               # 天の川の写真の濃さ（模式図の天の川銀河はその分だけ薄くする）
         self._photo_w = {}             # 天体ごとの写真の濃さ（0〜1）。模式図はその分だけ薄くする
         self.reload_photos(gl=False)
@@ -1155,7 +1156,7 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue("u_inv", _qmat(inv))
         p.setUniformValue("u_ecl2eq", QMatrix3x3([float(x) for x in ECL2EQ.reshape(-1)]))
         p.setUniformValue1i("u_tex", 0)
-        p.setUniformValue1f("u_gain", float(w * MW_GAIN))
+        p.setUniformValue1f("u_gain", float(w * MW_GAINS[self.mw_level]))
         f.glActiveTexture(GL_TEXTURE0)
         self._mw_tex.bind(0)
         f.glDisable(GL_DEPTH_TEST)

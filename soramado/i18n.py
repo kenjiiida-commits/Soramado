@@ -303,6 +303,8 @@ EN.update({
     "天の川の写真（Gaia）をダウンロード…": "Download the Milky Way photo (Gaia)…",
     "天の川を写真で表示（ダウンロードしたもの）": "Show the Milky Way photo (downloaded)",
     "天の川の写真": "Milky Way photo",
+    "天の川の明るさ": "Milky Way brightness", "控えめ（暗い山の上の見え方）": "Subtle (as from a dark mountain site)",
+    "ふつう": "Normal", "明るめ": "Bright", "とても明るい": "Very bright",
     "天の川の写真はダウンロード済みです。もう一度作り直しますか？\n\n": "The Milky Way photo is already downloaded. Make it again?\n\n",
     "ESA の Gaia 衛星が測った約17億個の星の光から作られた、全天の地図（CDS が配信）をダウンロードして、"
     "太陽系から見た空に天の川を表示します。\n\n通信量は約3MB です。よろしいですか？":

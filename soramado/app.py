@@ -342,6 +342,17 @@ class MainWindow(QMainWindow):
         self.act_gal = self._toggle(m_view, tr("銀河"), "show_galaxies")
         self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
         self.act_mwphoto = self._toggle(m_view, tr("天の川を写真で表示（ダウンロードしたもの）"), "show_mwphoto")
+        m_mwl = m_view.addMenu(tr("天の川の明るさ"))
+        from PySide6.QtGui import QActionGroup
+        self._mw_grp = QActionGroup(self)
+        self._mw_acts = []
+        for i, label in enumerate((tr("控えめ（暗い山の上の見え方）"), tr("ふつう"), tr("明るめ"), tr("とても明るい"))):
+            a = QAction(label, self, checkable=True)
+            a.setChecked(i == self.view.mw_level)
+            a.triggered.connect(lambda _=False, i=i: self._set_mw_level(i))
+            self._mw_grp.addAction(a)
+            m_mwl.addAction(a)
+            self._mw_acts.append(a)
         self.act_small = self._toggle(m_view, tr("準惑星・小惑星・彗星"), "show_small")
         self.act_minor = self._toggle(m_view, tr("たくさんの小惑星・彗星（ダウンロードしたもの）"), "show_minor")
         self.act_exo = self._toggle(m_view, tr("系外惑星を持つ恒星（ダウンロードしたもの）"), "show_exo")
@@ -443,6 +454,12 @@ class MainWindow(QMainWindow):
                 act.setChecked(str(val).lower() in ("true", "1"))
         if st.value("view/limit") is not None:
             self.sl_stars.setValue(int(st.value("view/limit")))
+        try:
+            lv = st.value("view/mw_level")
+            if lv is not None and 0 <= int(lv) <= 3:
+                self._set_mw_level(int(lv))
+        except (TypeError, ValueError):
+            pass
         if st.value("view/magnify") is not None:
             self.sl_mag.setValue(int(st.value("view/magnify")))
         if st.value("time/speed") is not None:
@@ -458,10 +475,16 @@ class MainWindow(QMainWindow):
         for name in self._VIEW_FLAGS:
             st.setValue(f"view/{name}", bool(getattr(self.view, name)))
         st.setValue("view/limit", self.sl_stars.value())
+        st.setValue("view/mw_level", self.view.mw_level)
         st.setValue("view/magnify", self.sl_mag.value())
         st.setValue("time/speed", self.cb_speed.currentIndex())
         if not self.view.ground:
             st.setValue("view/target", self.view.target)
+
+    def _set_mw_level(self, i):
+        self.view.mw_level = i
+        self._mw_acts[i].setChecked(True)
+        self.view.update()
 
     def _set_lang(self, code):
         self.settings.setValue("ui/lang", code)
