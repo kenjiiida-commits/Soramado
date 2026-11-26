@@ -118,8 +118,29 @@ def tonight(view) -> list[Step]:
     return steps
 
 
+def explorers() -> list[Step]:
+    from . import spacecraft as sc
+    return [
+        Step("宇宙探査の旅をたどりましょう。まずは、1977年に打ち上げられた2機のボイジャーです。", "sun", dist=60.0,
+             extra={"jd": sc._jd(1981, 1, 1)}, seconds=10),
+        Step("ボイジャー2号は、木星・土星・天王星・海王星の4つの惑星を次々に訪れました。"
+             "惑星の引力を利用して進路と速さを変える「スイングバイ」を繰り返しています。", "sc:voyager2", dist=45.0,
+             extra={"jd": sc._jd(1989, 8, 25)}, seconds=12),
+        Step("2026年11月、ボイジャー1号は地球から光で1日かかる距離（約173AU）に達しました。"
+             "人類が作ったもので、いちばん遠くにある物体です。", "sun", dist=420.0,
+             extra={"jd": sc._jd(2026, 11, 26)}, seconds=12),
+        Step("ニュー・ホライズンズは2015年に冥王星へ到着し、ハート形の地形を撮影しました。", "sc:newhorizons",
+             dist=45.0, extra={"jd": sc._jd(2015, 7, 14)}, seconds=11),
+        Step("日本の「はやぶさ」は、イオンエンジンで小惑星イトカワへ向かい、2010年に地球へ帰ってきました。",
+             "sc:hayabusa", dist=3.0, extra={"jd": sc._jd(2005, 9, 12)}, seconds=11),
+        Step("「はやぶさ2」は小惑星リュウグウで試料を採取し、2020年にカプセルを地球へ届けました。",
+             "sc:hayabusa2", dist=3.0, extra={"jd": sc._jd(2019, 7, 11)}, seconds=11),
+    ]
+
+
 TOURS = [
     ("solar", "太陽系めぐり", solar_system),
     ("scale", "宇宙の大きさ", scale_of_universe),
     ("tonight", "今夜の星空", tonight),
+    ("explorers", "探査機の旅", explorers),
 ]

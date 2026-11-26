@@ -22,6 +22,7 @@ from . import galaxies as gx
 from . import smallbodies as sbs
 from . import tours
 from . import cosmos
+from . import spacecraft as crafts
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -143,6 +144,9 @@ class MainWindow(QMainWindow):
         for key in SMALL_ORDER:
             self.cb_target.addItem(BY_KEY[key].name, key)
         self.cb_target.insertSeparator(self.cb_target.count())
+        for sc in crafts.SPACECRAFT:
+            self.cb_target.addItem("🛰 " + sc.name, sc.key)
+        self.cb_target.insertSeparator(self.cb_target.count())
         for g in gx.GALAXIES:
             if g.in_menu:
                 self.cb_target.addItem(g.name, g.key)
@@ -262,6 +266,7 @@ class MainWindow(QMainWindow):
         self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
         self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
         self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
+        self.act_craft = self._toggle(m_view, "探査機の航路", "show_craft")
         self.act_qso = self._toggle(m_view, "クエーサー", "show_quasars")
         self.act_cmb = self._toggle(m_view, "宇宙マイクロ波背景放射", "show_cmb")
         m_view.addSeparator()
@@ -371,6 +376,14 @@ class MainWindow(QMainWindow):
                 html.append(f"<h2>{v.gcat.label(i)}</h2>")
                 html.append("<p>" + v.gcat.describe(i).replace("　｜　", "<br>") + "</p>")
                 html.append(f"<p>{KIND_DESCRIPTIONS.get(int(v.gcat.kind[i]), '')}</p>")
+            elif t in crafts.BY_KEY:
+                sc = crafts.BY_KEY[t]
+                html.append(f"<h2>🛰 {sc.name}</h2><p>{sc.note}</p><h3>おもなできごと</h3><ul>")
+                for jd_e, txt in sc.events:
+                    d = astro.datetime_from_jd(jd_e)
+                    mark = "✔ " if jd_e <= v.jd else ""
+                    html.append(f"<li>{mark}{d.year}年{d.month}月{d.day}日　{txt}</li>")
+                html.append("</ul><p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
             elif t == "u:cmb":
                 html.append("<h2>観測できる宇宙の果て</h2>")
                 html.append(f"<p>{text_for('u:cmb')}</p>")
@@ -457,6 +470,8 @@ class MainWindow(QMainWindow):
             if self.btn_ground.isChecked():
                 self.btn_ground.setChecked(False)
             v.paused = True          # ツアー中は時間を止めて、場面を落ち着いて見られるようにする
+            if "jd" in st.extra:
+                v.set_jd(st.extra["jd"])
             dist = st.dist
             if dist is None and st.dist_mult:
                 dist = v._default_dist(st.target) * st.dist_mult
@@ -605,6 +620,21 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         key = v.target
+        if key in crafts.BY_KEY:
+            sc = crafts.BY_KEY[key]
+            p = crafts.position(sc, v.jd)
+            parts = [f"<b>{sc.name}</b>", "探査機"]
+            if p is None:
+                t0, _t1 = crafts.span(sc)
+                parts.append("打ち上げ前" if v.jd < t0 else "この画面で表示する航路はここまで")
+            else:
+                parts += [f"太陽から {_fmt_dist(np.linalg.norm(p))}",
+                          f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}",
+                          f"最近のできごと: {crafts.last_event(sc, v.jd)}"]
+            parts.append("※ 航路はおおよそ")
+            self.status_info.setText("　｜　".join(parts))
+            self._refresh_warn(v)
+            return
         if key == "u:cmb":
             q = f"クエーサー {v.qso_count:,} 個を表示中" if v.qso_count else "クエーサーのデータは未ダウンロード（ファイルメニュー）"
             self.status_info.setText("<b>観測できる宇宙の果て</b>　｜　宇宙マイクロ波背景放射まで 約"
@@ -748,6 +778,7 @@ class MainWindow(QMainWindow):
             "・月の位置: Paul Schlyter「How to compute planetary positions」<br>"
             "・衛星の位置: PyEphem（トリトンは NASA JPL の平均軌道要素）<br>"
             "・小天体の軌道: 冥王星は NASA JPL、その他は Wikipedia 各記事の軌道要素（JPL などが出典）<br>"
+            "・探査機の航路: 惑星・小惑星を通過した日付から計算したおおよその航路<br>"
             "・天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）<br>"
             "・恒星: HYG データベース v4.1（CC BY-SA 4.0）<br>"
             "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"

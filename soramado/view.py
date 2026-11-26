@@ -19,6 +19,7 @@ from .galaxy_catalog import GalaxyCatalog
 from . import satellites as sats
 from . import smallbodies as sbs
 from . import cosmos
+from . import spacecraft as crafts
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -211,6 +212,7 @@ class SpaceView(QOpenGLWidget):
         self.selected_star = -1
         self.show_galaxies = True
         self.show_small = True
+        self.show_craft = True
         self.show_quasars = True
         self.show_cmb = True
         self.qso_count = 0
@@ -258,7 +260,7 @@ class SpaceView(QOpenGLWidget):
         return key in gx.BY_KEY or key.startswith("c:") or key == "u:cmb"
 
     def set_target(self, key: str, fly: bool = True):
-        if key not in BY_KEY and not self.is_galaxy(key):
+        if key not in BY_KEY and not self.is_galaxy(key) and key not in crafts.BY_KEY:
             return
         if self.ground:
             self.look_at(key)
@@ -314,7 +316,7 @@ class SpaceView(QOpenGLWidget):
 
     def fly_to(self, key: str, dist: float | None = None):
         """ツアー用：その天体へ、指定した距離まで飛んでいく。"""
-        if key not in BY_KEY and not self.is_galaxy(key):
+        if key not in BY_KEY and not self.is_galaxy(key) and key not in crafts.BY_KEY:
             return
         self.selected_star = -1
         new_dist = dist if dist is not None else self._default_dist(key)
@@ -378,6 +380,8 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- 大きさ・位置
 
     def display_radius(self, key: str) -> float:
+        if key in crafts.BY_KEY:
+            return 1e-10
         if key == "u:cmb":
             return cosmos.CMB_AU
         if key.startswith("c:"):
@@ -402,7 +406,17 @@ class SpaceView(QOpenGLWidget):
     def moon_scale(self) -> float:
         return self.sat_scale("earth")
 
+    def craft_pos(self, key: str) -> np.ndarray:
+        sc = crafts.BY_KEY[key]
+        p = crafts.position(sc, self.jd)
+        if p is None:
+            t0, t1 = crafts.span(sc)
+            p = crafts.position(sc, min(max(self.jd, t0), t1))
+        return p
+
     def display_pos(self, key: str) -> np.ndarray:
+        if key in crafts.BY_KEY:
+            return self.craft_pos(key)
         if key == "u:cmb":
             return self.positions["sun"]
         if key.startswith("c:"):
@@ -416,6 +430,8 @@ class SpaceView(QOpenGLWidget):
         return self.positions[key]
 
     def _min_dist(self, key):
+        if key in crafts.BY_KEY:
+            return 1e-6
         if key == "u:cmb":
             return 1.0
         if self.is_galaxy(key):
@@ -423,6 +439,10 @@ class SpaceView(QOpenGLWidget):
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
+        if key in crafts.BY_KEY:
+            # 航路が見えるくらいの距離から（遠くへ行った探査機ほど引いて見る）
+            r = float(np.linalg.norm(self.craft_pos(key)))
+            return max(1.5, r * 0.6)
         if key == "u:cmb":
             return cosmos.CMB_AU * 2.6
         if self.is_galaxy(key):
@@ -504,6 +524,8 @@ class SpaceView(QOpenGLWidget):
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
         self.m_galaxies = _Mesh(gx.build(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
+        self.m_craft = {sc.key: _Mesh(crafts.path(sc, until=crafts.ANCHOR_JD + 365.25 * 5),
+                                      [(0, 3)], GL_LINE_STRIP) for sc in crafts.SPACECRAFT}
         self.p_qso = prog(shaders.QSO_VS, shaders.QSO_FS)
         self.p_cmb = prog(shaders.CMB_VS, shaders.CMB_FS)
         self.m_qso = None
@@ -949,6 +971,19 @@ class SpaceView(QOpenGLWidget):
                 mesh.draw(f)
             p.release()
 
+        # ---- 探査機の航路
+        if self.show_craft and not self.ground and sun_far < 2e5:
+            p = self.p_line
+            p.bind()
+            self._common(p, viewproj)
+            p.setUniformValue("u_offset", QVector3D(*sun_rel))
+            p.setUniformValue1f("u_scale", 1.0)
+            for sc in crafts.SPACECRAFT:
+                alpha = 0.95 if sc.key == self.target else 0.6
+                p.setUniformValue("u_color", QVector4D(*sc.color, alpha))
+                self.m_craft[sc.key].draw(f)
+            p.release()
+
         # ---- 太陽の光芒
         clip = viewproj @ np.append(sun_rel, 1.0)
         if clip[3] > 0:
@@ -1057,9 +1092,32 @@ class SpaceView(QOpenGLWidget):
                 placed.append(rect)
         if self.show_small and not self.ground and not far:
             self._draw_comet_tails(painter, rel, viewproj, w, h)
+        if self.show_craft and not self.ground and getattr(self, "_sun_far", 0) < 2e5:
+            self._draw_craft(painter, viewproj, w, h, placed, fm)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
         painter.end()
+
+    def _draw_craft(self, painter, viewproj, w, h, placed, fm):
+        """探査機の現在位置（ひし形の印と名前）。"""
+        for sc in crafts.SPACECRAFT:
+            p = crafts.position(sc, self.jd)
+            if p is None:
+                continue
+            pr = self._project(p - self._eye, viewproj, w, h)
+            if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
+                continue
+            x, y, _ = pr
+            self._screen[sc.key] = (x, y, 6.0)
+            col = QColor.fromRgbF(*sc.color)
+            painter.setPen(QPen(col, 1.5))
+            painter.setBrush(col.darker(150))
+            painter.drawPolygon([QPointF(x, y - 5), QPointF(x + 5, y), QPointF(x, y + 5), QPointF(x - 5, y)])
+            rect = fm.boundingRect(sc.name).translated(int(x + 9), int(y + 4))
+            if any(rect.intersects(r) for r in placed):
+                continue
+            placed.append(rect)
+            painter.drawText(QPointF(x + 9, y + 4), sc.name)
 
     @staticmethod
     def _is_small(key: str) -> bool:
