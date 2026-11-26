@@ -84,6 +84,8 @@ def test_planes():
         worst = max(worst, ang)
         # もともとの軌道傾斜（ミランダは約4度）＋計算のずれ 4度まで
         incl = st.i if st.epoch == 2451545.0 else 0.0     # Horizons の要素の i は黄道に対する傾き
+        if key == "naiad":
+            incl = 4.7          # ナイアドは海王星の赤道面から約4.7度傾いている
         assert ang < 4.0 + incl, (key, ang)
     return worst
 

@@ -161,6 +161,33 @@ def procedural_ring(w: int = 512) -> QImage:
     return _to_image(np.repeat(rgba, 4, axis=0))
 
 
+def _thin_rings(r_in, r_out, rings, color, w=1024):
+    """細い環（半径・幅・不透明度のリスト）を、内側→外側の1行の画像にする。"""
+    r = np.linspace(r_in, r_out, w)
+    alpha = np.zeros(w)
+    px = (r_out - r_in) / w
+    for rr, width, a in rings:
+        wd = max(width, px * 1.5)          # 細すぎる環も、少なくとも1ピクセルちょっとの幅で描く
+        alpha = np.maximum(alpha, a * np.exp(-0.5 * ((r - rr) / (wd / 2)) ** 2))
+    rgb = np.tile(np.array(color, float), (w, 1))
+    rgba = np.concatenate([rgb, alpha[:, None]], axis=1)[None, :, :]
+    return _to_image(np.repeat(rgba, 4, axis=0))
+
+
+def procedural_ring_uranus() -> QImage:
+    """天王星の環（1977年に恒星の掩蔽で発見された、暗く細い環）。ε環がいちばん目立つ。"""
+    rings = [(41837, 40, 0.35), (42234, 40, 0.35), (42571, 40, 0.35), (44718, 60, 0.45), (45661, 60, 0.45),
+             (47176, 40, 0.3), (47627, 40, 0.4), (48300, 50, 0.45), (50023, 30, 0.25), (51149, 100, 0.75)]
+    return _thin_rings(41000, 51700, rings, (0.62, 0.62, 0.66))
+
+
+def procedural_ring_neptune() -> QImage:
+    """海王星の環（ガレ環・ルヴェリエ環・ラッセル環・アラゴ環・アダムズ環）。"""
+    rings = [(41900, 2000, 0.10), (53200, 110, 0.45), (55200, 4000, 0.06), (57200, 100, 0.25),
+             (62932, 50, 0.5)]
+    return _thin_rings(40000, 63500, rings, (0.70, 0.62, 0.58))
+
+
 def load_image(filename: str) -> QImage | None:
     p = downloaded_path(filename)
     if p is None:

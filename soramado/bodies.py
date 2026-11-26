@@ -45,9 +45,9 @@ BODIES = [
          "saturn", ring=(74500.0, 136780.0), texture="2k_saturn.jpg",
          extra={"ring": "2k_saturn_ring_alpha.png"}),
     Body("uranus", "天王星", 25362.0, (0.60, 0.90, 0.95), 257.311, -15.175, 203.81, -501.1600928,
-         "uranus", texture="2k_uranus.jpg"),
+         "uranus", ring=(41000.0, 51700.0), texture="2k_uranus.jpg"),
     Body("neptune", "海王星", 24622.0, (0.40, 0.55, 1.0), 299.36, 43.46, 249.978, 541.1397757,
-         "neptune", texture="2k_neptune.jpg"),
+         "neptune", ring=(40000.0, 63500.0), texture="2k_neptune.jpg"),
 ]
 
 def _add_satellites():

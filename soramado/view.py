@@ -765,6 +765,10 @@ class SpaceView(QOpenGLWidget):
                     self.tex[f"{b.key}:{kind}"] = make(img, repeat=(kind != "ring"))
         if "saturn:ring" not in self.tex:
             self.tex["saturn:ring"] = make(textures.procedural_ring(), repeat=False)
+        if "uranus:ring" not in self.tex:
+            self.tex["uranus:ring"] = make(textures.procedural_ring_uranus(), repeat=False)
+        if "neptune:ring" not in self.tex:
+            self.tex["neptune:ring"] = make(textures.procedural_ring_neptune(), repeat=False)
         if "cmb" not in self.tex:
             self.tex["cmb"] = make(cosmos.cmb_texture())
 
@@ -808,6 +812,8 @@ class SpaceView(QOpenGLWidget):
     def _draw_neb_labels(self, painter, viewproj, w, h, placed, fm, focal):
         if not self.show_nebulae or self.ground or self._sun_far > 5e4 * LY_AU:
             return
+        if self._sun_far < 3000.0 and self.dist < 1.0 and not self.is_neb(self.target):
+            return            # 惑星や衛星を近くで見ているときは、背景の星雲・星団の名前は出さない
         items = []
         for i, n in enumerate(neb.NEBULAE):
             c = n.pos - self._eye
@@ -1420,22 +1426,27 @@ class SpaceView(QOpenGLWidget):
         f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         f.glDepthMask(False)
 
-        # ---- 土星の環
-        pos = rel["saturn"]
-        if sat_r / np.linalg.norm(pos) * h > 0.3:
+        # ---- 環（土星・天王星・海王星）
+        for rk in ("saturn", "uranus", "neptune"):
+            rb = BY_KEY[rk]
+            pos = rel[rk]
+            pr_r = self.display_radius(rk)
+            if pr_r / np.linalg.norm(pos) * h <= 0.3:
+                continue
+            rot = sat_rot if rk == "saturn" else body_orientation(rb, self.jd)
             p = self.p_ring
             p.bind()
             self._common(p, viewproj)
             model = np.eye(4)
-            model[:3, :3] = sat_rot * sat_r
+            model[:3, :3] = rot * pr_r
             model[:3, 3] = pos
             p.setUniformValue("u_model", _qmat(model))
-            p.setUniformValue("u_radii", QVector2D(sat.ring[0] / sat.radius_km, sat.ring[1] / sat.radius_km))
+            p.setUniformValue("u_radii", QVector2D(rb.ring[0] / rb.radius_km, rb.ring[1] / rb.radius_km))
             p.setUniformValue("u_sun", QVector3D(*sun_rel))
             p.setUniformValue("u_center", QVector3D(*pos))
-            p.setUniformValue1f("u_planet_r", float(sat_r))
+            p.setUniformValue1f("u_planet_r", float(pr_r))
             p.setUniformValue1i("u_tex", 0)
-            self.tex["saturn:ring"].bind(0)
+            self.tex[f"{rk}:ring"].bind(0)
             self.m_ring.draw(f)
             p.release()
 
