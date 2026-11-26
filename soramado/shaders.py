@@ -554,3 +554,53 @@ void main() {
     }
 }
 """
+
+# ---------------------------------------------------------------- 星雲・星団（模式図の粒）
+NEB_VS = """#version 330 core
+layout(location=0) in vec3 a_pos;    // 天体の中心からの位置 [AU]
+layout(location=1) in vec3 a_col;
+layout(location=2) in float a_size;  // 粒の大きさ（半径）[AU]。0 は星
+uniform vec3 u_center;               // カメラから見た天体の中心
+uniform mat4 u_viewproj;
+uniform float u_focal;               // 距離 1 で 1 AU が何ピクセルか
+uniform float u_px;
+uniform float u_star_gain;
+uniform float u_haze_gain;
+""" + LOGDEPTH_VS + """
+out vec3 v_col;
+out float v_haze;
+void main() {
+    vec3 rel = u_center + a_pos;
+    gl_Position = u_viewproj * vec4(rel, 1.0);
+    v_logz = 1.0 + u_logc * gl_Position.w;
+    float w = max(gl_Position.w, 1e-9);
+    if (a_size > 0.0) {
+        float px = a_size / w * u_focal;
+        float s = clamp(px, 1.5, 300.0);
+        float k = (px < 1.5) ? (px * px) / (s * s) : 1.0;     // 小さすぎるときは、明るさの合計を保って暗くする
+        if (px > 300.0) k = 300.0 / px;                       // 近づきすぎたら薄くする
+        gl_PointSize = s * u_px;
+        v_col = a_col * u_haze_gain * k;
+        v_haze = 1.0;
+    } else {
+        gl_PointSize = 2.2 * u_px;
+        v_col = a_col * u_star_gain * 2.5;
+        v_haze = 0.0;
+    }
+}
+"""
+
+NEB_FS = """#version 330 core
+""" + LOGDEPTH_FS + """
+in vec3 v_col;
+in float v_haze;
+out vec4 frag;
+void main() {
+    writeDepth();
+    vec2 q = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(q, q);
+    if (r2 > 1.0) discard;
+    float g = v_haze > 0.5 ? exp(-4.0 * r2) * (1.0 - r2) : exp(-3.0 * r2);
+    frag = vec4(v_col * g, 1.0);
+}
+"""

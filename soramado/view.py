@@ -23,6 +23,7 @@ from . import spacecraft as crafts
 from . import minorplanets as mpl
 from . import exoplanets as exo
 from . import eclipses
+from . import nebulae as neb
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -221,6 +222,8 @@ class SpaceView(QOpenGLWidget):
         self.qso_count = 0
         self.gcat = GalaxyCatalog()
         self._sunlight_sky = 1.0
+        self.show_nebulae = True
+        self.m_neb = []              # 星雲・星団ごとの粒
         self.show_exo = True
         self.exo = exo.load()        # 系外惑星（ダウンロードしたとき）
         self._exo_orbits = {}        # 惑星系の番号 → 軌道の線のリスト
@@ -291,8 +294,16 @@ class SpaceView(QOpenGLWidget):
         except ValueError:
             return False
 
+    def is_neb(self, key: str) -> bool:
+        if not key.startswith("n:"):
+            return False
+        try:
+            return 0 <= int(key[2:]) < len(neb.NEBULAE)
+        except ValueError:
+            return False
+
     def valid_key(self, key: str) -> bool:
-        return (key in BY_KEY or self.is_galaxy(key) or key in crafts.BY_KEY or self.is_minor(key)
+        return (self.is_neb(key) or key in BY_KEY or self.is_galaxy(key) or key in crafts.BY_KEY or self.is_minor(key)
                 or self.is_exo(key))
 
     def is_galaxy(self, key: str) -> bool:
@@ -426,6 +437,8 @@ class SpaceView(QOpenGLWidget):
     def display_radius(self, key: str) -> float:
         if key in crafts.BY_KEY:
             return 1e-10
+        if key.startswith("n:"):
+            return neb.NEBULAE[int(key[2:])].radius_au
         if key.startswith("x:"):
             if self.exo is None:
                 return 1e-3
@@ -476,6 +489,8 @@ class SpaceView(QOpenGLWidget):
     def display_pos(self, key: str) -> np.ndarray:
         if key in crafts.BY_KEY:
             return self.craft_pos(key)
+        if key.startswith("n:"):
+            return neb.NEBULAE[int(key[2:])].pos
         if key.startswith("x:"):
             if self.exo is None:
                 return self.positions["sun"]
@@ -499,6 +514,8 @@ class SpaceView(QOpenGLWidget):
     def _min_dist(self, key):
         if key in crafts.BY_KEY:
             return 1e-6
+        if key.startswith("n:"):
+            return self.display_radius(key) * 0.3
         if key.startswith("x:"):
             return self.display_radius(key) * 1.5
         if key.startswith("mp:"):
@@ -510,6 +527,8 @@ class SpaceView(QOpenGLWidget):
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
+        if key.startswith("n:"):
+            return self.display_radius(key) * 3.2
         if key.startswith("x:") and self.exo is not None:
             return max(self.exo.system_size(int(key[2:])) * 3.0, 0.05)
         if key.startswith("mp:"):
@@ -654,6 +673,8 @@ class SpaceView(QOpenGLWidget):
         self.m_qso = None
         self._load_quasars()
         self.p_mp = prog(shaders.MP_VS, shaders.MP_FS)
+        self.p_neb = prog(shaders.NEB_VS, shaders.NEB_FS)
+        self.m_neb = [_Mesh(neb.vertex_data(n), [(0, 3), (1, 3), (2, 1)], GL_POINTS) for n in neb.NEBULAE]
         self._load_minor()
         self.p_gcat = prog(shaders.GCAT_VS, shaders.GCAT_FS)
         self.m_gcat = _Mesh(self.gcat.vertex_data(),
@@ -727,6 +748,70 @@ class SpaceView(QOpenGLWidget):
         else:
             self.m_qso.update(data)
         self.qso_count = len(data)
+
+    def _draw_nebulae(self, f, viewproj, h):
+        if not self.show_nebulae or self.ground or not self.m_neb:
+            return
+        # 天の川銀河の外まで離れたら、模式図の天の川銀河にまかせて出さない
+        k = 1.0 - _smooth(2e4 * LY_AU, 8e4 * LY_AU, self._sun_far)
+        if k <= 0.01:
+            return
+        focal = h / (2 * math.tan(math.radians(self._fov) / 2))
+        p = self.p_neb
+        p.bind()
+        self._common(p, viewproj)
+        p.setUniformValue1f("u_focal", float(focal))
+        p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
+        p.setUniformValue1f("u_haze_gain", float(k * 2.2))
+        f.glBlendFunc(GL_ONE, GL_ONE)
+        for n, m in zip(neb.NEBULAE, self.m_neb):
+            c = n.pos - self._eye
+            d = float(np.linalg.norm(c))
+            # 星団の星は、近づくほど明るく見える（地球から見たときを基準に）
+            star = min(1.0, 0.35 * (n.ly * LY_AU / max(d, 1.0)) ** 1.2) * k
+            p.setUniformValue1f("u_star_gain", float(star))
+            p.setUniformValue("u_center", QVector3D(*c))
+            m.draw(f)
+        f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        p.release()
+
+    def _draw_neb_labels(self, painter, viewproj, w, h, placed, fm, focal):
+        if not self.show_nebulae or self.ground or self._sun_far > 5e4 * LY_AU:
+            return
+        items = []
+        for i, n in enumerate(neb.NEBULAE):
+            c = n.pos - self._eye
+            d = float(np.linalg.norm(c))
+            if d < n.radius_au * 0.8:
+                continue                      # 中にいるときは名前を出さない
+            pr = self._project(c, viewproj, w, h)
+            if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
+                continue
+            r_px = n.radius_au / d * focal
+            key = f"n:{i}"
+            self._screen[key] = (pr[0], pr[1], max(r_px, 8.0))
+            # 大きく見えるもの・注目しているもの・解説のある有名なものから
+            prio = (key != self.target, -r_px - (40 if n.note else 0))
+            items.append((prio, key, n, pr[0], pr[1], r_px))
+        items.sort(key=lambda t: t[0])
+        shown = 0
+        for _p, key, n, x, y, r_px in items:
+            if shown >= 18 and key != self.target:
+                break
+            if r_px < 3 and not n.note and key != self.target and self._sun_far < 50 * LY_AU:
+                continue                      # 太陽系の近くからは、有名なものだけ名前を出す
+            rect = fm.boundingRect(n.name)
+            rect.moveCenter(QPointF(x, y + min(r_px, h * 0.4) * 0.6 + 12).toPoint())
+            if any(rect.intersects(r) for r in placed):
+                continue
+            placed.append(rect)
+            col = {"ocl": QColor(170, 200, 255), "gcl": QColor(255, 215, 150), "pn": QColor(130, 230, 210),
+                   "snr": QColor(255, 160, 120)}.get(n.type, QColor(255, 150, 170))
+            painter.setPen(QPen(QColor(0, 0, 0, 180)))
+            painter.drawText(rect.translated(1, 1), Qt.AlignCenter, n.name)
+            painter.setPen(QPen(col.lighter(125) if key == self.target else col))
+            painter.drawText(rect, Qt.AlignCenter, n.name)
+            shown += 1
 
     def _draw_glow(self, f, viewproj, w, h, rel, radius_au, absmag, color):
         """恒星の光芒（太陽や、よその惑星系の恒星）。"""
@@ -1365,6 +1450,9 @@ class SpaceView(QOpenGLWidget):
         # ---- たくさんの小惑星・彗星
         self._draw_minor(f, viewproj, sun_rel, sun_far)
 
+        # ---- 星雲・星団
+        self._draw_nebulae(f, viewproj, h)
+
         # ---- 探査機の航路
         if self.show_craft and not self.ground and sun_far < 2e5:
             p = self.p_line
@@ -1476,6 +1564,7 @@ class SpaceView(QOpenGLWidget):
         if self.ground:
             self._draw_compass(painter, viewproj, w, h, placed, fm)
         else:
+            self._draw_neb_labels(painter, viewproj, w, h, placed, fm, focal)
             self._draw_galaxy_labels(painter, viewproj, w, h, placed, fm, focal)
         if self.show_cmb and getattr(self, "_sun_far", 0) > cosmos.CMB_AU * 1.05:
             top = rel["sun"] + self._basis[1] * cosmos.CMB_AU

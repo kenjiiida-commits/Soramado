@@ -28,6 +28,7 @@ from . import recorder
 from . import minorplanets as mpl
 from . import exoplanets as exo
 from . import eclipses
+from . import nebulae as neb
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -168,6 +169,11 @@ class MainWindow(QMainWindow):
         self.cb_target.insertSeparator(self.cb_target.count())
         for sc in crafts.SPACECRAFT:
             self.cb_target.addItem("🛰 " + sc.name, sc.key)
+        self.cb_target.insertSeparator(self.cb_target.count())
+        # 星雲・星団（解説のある有名なもの。ほかは画面でダブルクリック）
+        for i, n in sorted(enumerate(neb.NEBULAE), key=lambda t: t[1].ly):
+            if n.note:
+                self.cb_target.addItem("✦ " + n.name, f"n:{i}")
         self.cb_target.insertSeparator(self.cb_target.count())
         for g in gx.GALAXIES:
             if g.in_menu:
@@ -317,6 +323,7 @@ class MainWindow(QMainWindow):
         self.act_conl = self._toggle(m_view, "星座線", "show_con_lines")
         self.act_conn = self._toggle(m_view, "星座名", "show_con_names")
         self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
+        self.act_neb = self._toggle(m_view, "星雲・星団", "show_nebulae")
         self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
         self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
         self.act_minor = self._toggle(m_view, "たくさんの小惑星・彗星（ダウンロードしたもの）", "show_minor")
@@ -377,7 +384,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae")
 
     def _restore_settings(self):
         st = self.settings
@@ -390,7 +397,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
@@ -893,6 +900,15 @@ class MainWindow(QMainWindow):
                     mark = "✔ " if jd_e <= v.jd else ""
                     html.append(f"<li>{mark}{d.year}年{d.month}月{d.day}日　{txt}</li>")
                 html.append("</ul><p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
+            elif v.is_neb(t):
+                n = neb.NEBULAE[int(t[2:])]
+                html.append(f"<h2>{n.name}</h2>")
+                html.append("<p>" + "<br>".join(neb.describe(n)) + "</p>")
+                if n.note:
+                    html.append(f"<p>{n.note}</p>")
+                html.append(f"<p><b>{neb.TYPE_JA[n.type]}</b>：{neb.TYPE_NOTE[n.type]}</p>")
+                html.append("<p style='color:#888'>位置・見かけの大きさは OpenNGC、距離は代表的な値の目安です。"
+                            "形は、見かけの大きさと向きに合わせて粒を並べた模式図です（本物の写真ではありません）。</p>")
             elif v.is_exo(t):
                 i = int(t[2:])
                 sy = v.exo.systems[i]
@@ -1177,6 +1193,13 @@ class MainWindow(QMainWindow):
                           f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}",
                           f"最近のできごと: {crafts.last_event(sc, v.jd)}"]
             parts.append("※ 航路はおおよそ")
+            self.status_info.setText("　｜　".join(parts))
+            self._refresh_warn(v)
+            return
+        if v.is_neb(key):
+            n = neb.NEBULAE[int(key[2:])]
+            parts = [f"<b>{n.name}</b>"] + neb.describe(n) + ["※ 形は模式図"]
+            parts.append(f"視点の距離 {_fmt_dist(v.dist)}")
             self.status_info.setText("　｜　".join(parts))
             self._refresh_warn(v)
             return
