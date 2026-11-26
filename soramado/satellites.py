@@ -289,8 +289,41 @@ def _single(key: str, jd: float) -> np.ndarray:
     d_au = float(p.earth_distance)
     dra = ((float(m.a_ra) - ra + math.pi) % (2 * math.pi) - math.pi) * math.cos(dec)
     ddec = float(m.a_dec) - dec
-    k = math.hypot(dra, ddec) * d_au / max(math.hypot(m.x, m.y), 1e-12)
+    k = _radius_au(s.parent, jd)
     return astro.equatorial_to_ecliptic(dra * d_au * east + ddec * d_au * north + m.z * k * toward)
+
+
+_K_CACHE = {}
+
+
+def _radius_au(parent: str, jd: float) -> float:
+    """PyEphem の衛星の x, y, z（惑星の半径が単位）を AU に直す係数。
+
+    以前は衛星ごとに「見かけの離れ角 ÷ x,y」で求めていたが、衛星が惑星の真ん前や真後ろ
+    （x, y がほぼ 0）にいると割り算が不安定になり、軌道の線に段差ができていた。
+    そこで、惑星ごとに離れた位置の衛星で何度か測った中央値を使う。
+    """
+    k = _K_CACHE.get(parent)
+    if k is not None:
+        return k
+    vals = []
+    for key, s in BY_KEY.items():
+        if s.parent != parent or key not in _EPHEM_MOON:
+            continue
+        for i in range(24):
+            date = ephem.Date(jd + s.period * i / 24 - 2415020.0)
+            p = getattr(ephem, _EPHEM_PLANET[parent])(date)
+            m = getattr(ephem, _EPHEM_MOON[key])(date)
+            r = math.hypot(m.x, m.y)
+            if r < 1.0:
+                continue
+            ra, dec = float(p.a_ra), float(p.a_dec)
+            dra = ((float(m.a_ra) - ra + math.pi) % (2 * math.pi) - math.pi) * math.cos(dec)
+            ddec = float(m.a_dec) - dec
+            vals.append(math.hypot(dra, ddec) * float(p.earth_distance) / r)
+    k = float(np.median(vals)) if vals else 60000.0 / astro.AU_KM
+    _K_CACHE[parent] = k
+    return k
 
 
 def _mean_orbit(s: Satellite, jd: float, segments: int) -> np.ndarray:
