@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from datetime import timezone
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +16,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDi
                                QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView)
 
 from . import __version__, astro, textures
-from .bodies import BODIES, BY_KEY
+from .bodies import BY_KEY
 from .view import SpaceView, format_length
 from . import galaxies as gx
 from . import smallbodies as sbs
@@ -1689,8 +1688,8 @@ class MainWindow(QMainWindow):
             "<p>作者: 飯田顕治 ／ ライセンス: MIT</p>"
             "<p><b>使用しているデータ</b><br>"
             "・惑星の軌道: NASA JPL「Approximate Positions of the Planets」<br>"
-            "・月の位置: Paul Schlyter「How to compute planetary positions」<br>"
-            "・衛星の位置: PyEphem（トリトンは NASA JPL の平均軌道要素）<br>"
+            "・月の位置・日食・月食・流星群・惑星の接近: PyEphem<br>"
+            "・衛星の位置: PyEphem（おもな衛星）、NASA JPL Horizons の軌道要素（小さな衛星・トリトン）<br>"
             "・小天体の軌道: 冥王星は NASA JPL、その他は Wikipedia 各記事の軌道要素（JPL などが出典）<br>"
             "・探査機の航路: 惑星・小惑星を通過した日付から計算したおおよその航路<br>"
             "・天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）<br>"
@@ -1698,7 +1697,12 @@ class MainWindow(QMainWindow):
             "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"
             "・銀河: 位置・距離・大きさは文献のおおよその値。形は粒子で作った模式図<br>"
             "・銀河カタログ（約1万個）: OpenNGC（CC BY-SA 4.0）。距離は後退速度から推定<br>"
+            "・星雲・星団: OpenNGC（CC BY-SA 4.0）の位置・大きさ。形は模式図<br>"
+            "・流星群: 国際流星機構（IMO）の流星群カレンダーの代表値<br>"
             "・クエーサー（ダウンロードした場合）: SDSS DR16Q（Lyke et al. 2020）、VizieR VII/289<br>"
+            "・小惑星・彗星（ダウンロードした場合）: NASA JPL Solar System Dynamics の軌道要素の表<br>"
+            "・系外惑星（ダウンロードした場合）: NASA Exoplanet Archive<br>"
+            "・人工衛星（ダウンロードした場合）: CelesTrak の軌道要素（TLE）<br>"
             "・宇宙マイクロ波背景放射: 計算で作った模式図（本物の観測地図ではありません）<br>"
             "・惑星の画像（ダウンロードした場合）: "
             "<a href='https://www.solarsystemscope.com/textures/'>Solar System Scope</a>"

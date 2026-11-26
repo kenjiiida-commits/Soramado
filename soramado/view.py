@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen,
+from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF,
                            QVector2D, QVector3D, QVector4D)
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture,
                               QOpenGLVertexArrayObject)
@@ -982,16 +982,22 @@ class SpaceView(QOpenGLWidget):
         if len(idx) > 2500:
             idx = idx[np.argsort(dist[idx])[:2500]]
         self._exo_screen = (idx, sx[idx], sy[idx])
+        order = idx[np.argsort(dist[idx])]
+        # 近い600個は丸、それより遠いものは点でまとめて描く（たくさんの丸を1つずつ描くと重いので）
         painter.setBrush(Qt.NoBrush)
-        pen = QPen(QColor(90, 230, 130, 150), 1.0)
-        painter.setPen(pen)
-        for j in idx:
+        painter.setPen(QPen(QColor(90, 230, 130, 150), 1.0))
+        for j in order[:600]:
             painter.drawEllipse(QPointF(sx[j], sy[j]), 3.5, 3.5)
+        if len(order) > 600:
+            pen = QPen(QColor(90, 230, 130, 120), 3.0)
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawPoints(QPolygonF([QPointF(sx[j], sy[j]) for j in order[600:]]))
         # 名前：近いものから（ほかの名前と重ならないものだけ）
         painter.setPen(QColor(120, 235, 150, 210))
         shown = 0
         max_labels = 0 if cur >= 0 else 12      # よその惑星系の中にいるときは、ほかの恒星の名前は出さない
-        for j in idx[np.argsort(dist[idx])]:
+        for j in order[:80]:
             if shown >= max_labels:
                 break
             name = self.exo.name(int(j))
