@@ -27,6 +27,7 @@ class Step:
     look: str | None = None            # 地上モードで向く天体
     seconds: float = 9.0               # 次の場面へ進むまでの時間
     extra: dict = field(default_factory=dict)
+    pitch: float | None = None         # 見下ろす角度 [度]（None はそのまま）
 
 
 def solar_system() -> list[Step]:
@@ -138,9 +139,61 @@ def explorers() -> list[Step]:
     ]
 
 
+def asteroids(view) -> list[Step]:
+    """小惑星の世界。ダウンロードした小惑星のデータがあれば、それも使う。"""
+    from . import spacecraft as sc
+    mp = view.mp
+    steps = []
+    if mp is None:
+        steps.append(Step("小惑星の世界をめぐります。（「ファイル」→「小惑星・彗星のデータをダウンロード」をすると、"
+                          "約90万個の小惑星が見えるようになります。）", "sun", dist=7.0, pitch=35, seconds=10))
+    else:
+        steps.append(Step(f"小惑星の世界をめぐりましょう。ここに見えている点は、番号の付いた小惑星と彗星、"
+                          f"約{len(mp) // 10000}万個です。", "sun", dist=7.0, pitch=35, seconds=10))
+    steps += [
+        Step("火星と木星のあいだ、太陽から約2〜3.3 AU のところに、小惑星が集まった「小惑星帯」があります。"
+             "これだけ多くても、全部合わせた重さは月の3%ほどしかありません。", "sun", dist=9.0, pitch=75, seconds=12),
+        Step("小惑星帯で最大の天体ケレス。直径は約940kmで、自分の重さで丸くなっているため「準惑星」に分類されています。",
+             "ceres", seconds=10),
+        Step("ベスタは小惑星帯で2番目に重い天体です。NASAの探査機ドーンが、ケレスとベスタを訪れました。", "vesta",
+             seconds=10),
+        Step("木星の軌道の上、木星の60度前と60度後ろには「トロヤ群」と呼ばれる小惑星の集まりがあります（緑）。"
+             "太陽と木星の引力がつり合う場所に、とらえられています。", "sun", dist=16.0, pitch=80, seconds=13),
+        Step("小惑星帯の外側には、三角形のように並んだ「ヒルダ群」があります（黄）。"
+             "木星が太陽を2周するあいだに、ちょうど3周しています。", "sun", dist=12.0, pitch=85, seconds=12),
+        Step("地球の軌道に近づく小惑星もあります（橙）。世界中の望遠鏡で見張り、軌道を調べています。", "sun",
+             dist=3.5, pitch=50, seconds=11),
+        Step("「はやぶさ」が訪れた小惑星イトカワ。長さ約500mの、ラッコのような形の小惑星です。", "itokawa",
+             dist=0.6, seconds=10),
+        Step("「はやぶさ2」が訪れたリュウグウ。そろばんの玉のような形で、試料を地球に持ち帰りました。", "ryugu",
+             dist=0.6, seconds=10),
+    ]
+    if mp is not None:
+        hit = mp.find("Apophis")
+        if hit:
+            import numpy as np
+            jd = sc._jd(2029, 4, 13) + 0.9
+            # 計算した位置が地球から離れすぎているとき（軌道要素が古いなど）は、地球を中心に見る
+            near = np.linalg.norm(mp.position(hit[0], jd) - astro.all_positions(jd)["earth"]) < 0.01
+            steps.append(Step("小惑星アポフィス（直径約340m）は、2029年4月13日に地球から約3万8千kmのところを通ります。"
+                              "静止衛星より内側で、日本からは見えませんが、ヨーロッパやアフリカでは肉眼でも見えると予想されています。"
+                              "（この表示の位置は、おおよそです）", f"mp:{hit[0]}" if near else "earth",
+                              dist=0.012 if near else 0.02, extra={"jd": jd}, seconds=14))
+    steps += [
+        Step("海王星の外側には「太陽系外縁天体」が広がっています（青）。冥王星やエリスもそのなかまです。", "sun",
+             dist=140.0, pitch=40, seconds=12),
+        Step("ハレー彗星は約76年ごとに太陽に近づきます。次に戻ってくるのは2061年です。", "halley", dist=40.0,
+             seconds=11),
+        Step("小惑星や彗星は、太陽系ができたころの材料が残った「化石」です。それを調べることで、"
+             "地球の水や生命の材料がどこから来たのかがわかってきます。", "sun", dist=10.0, pitch=30, seconds=12),
+    ]
+    return steps
+
+
 TOURS = [
     ("solar", "太陽系めぐり", solar_system),
     ("scale", "宇宙の大きさ", scale_of_universe),
     ("tonight", "今夜の星空", tonight),
     ("explorers", "探査機の旅", explorers),
+    ("asteroids", "小惑星の世界", asteroids),
 ]

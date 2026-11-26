@@ -59,4 +59,4 @@ def test_halley_perihelion():
 
 def test_vertex_layout():
     v = _cat().vertex_data()
-    assert v.shape == (4, 13) and v.dtype == np.float32
+    assert v.shape == (4, 14) and v.dtype == np.float32

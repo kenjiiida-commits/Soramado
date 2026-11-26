@@ -463,6 +463,8 @@ layout(location=0) in vec3 a_p;      // 軌道面の向き（近日点の方向�
 layout(location=1) in vec3 a_q;
 layout(location=2) in vec4 a_el;     // a [AU], e, 基準日の平均近点角 [rad], 平均運動 [rad/日]
 layout(location=3) in vec3 a_col;
+layout(location=4) in float a_kind;
+uniform float u_far_gain;            // 遠くから見たときの、外側の天体（ケンタウルス族・外縁天体）の明るさ
 uniform float u_dt;                  // 基準日からの日数
 uniform vec3 u_sun;                  // カメラから見た太陽の位置
 uniform mat4 u_viewproj;
@@ -484,7 +486,9 @@ void main() {
     gl_Position = u_viewproj * vec4(rel, 1.0);
     v_logz = 1.0 + u_logc * gl_Position.w;
     // 明るすぎる点は、色を保ったまま点を大きくする（白飛びさせずに目立たせる）
-    vec3 c = a_col * u_gain;
+    float g = u_gain;
+    if (a_kind > 3.5 && a_kind < 5.5) g = max(g, u_far_gain);
+    vec3 c = a_col * g;
     float m = max(c.r, max(c.g, c.b));
     float size = 1.6;
     if (m > 1.0) {

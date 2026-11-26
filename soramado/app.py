@@ -715,7 +715,7 @@ class MainWindow(QMainWindow):
     def start_tour(self, tid):
         for t, title, fn in tours.TOURS:
             if t == tid:
-                steps = fn(self.view) if tid == "tonight" else fn()
+                steps = fn(self.view) if tid in ("tonight", "asteroids") else fn()
                 self._tour = {"title": title, "steps": steps, "i": -1}
                 self.tour_bar.show()
                 self._tour_go(+1)
@@ -773,7 +773,7 @@ class MainWindow(QMainWindow):
             dist = st.dist
             if dist is None and st.dist_mult:
                 dist = v._default_dist(st.target) * st.dist_mult
-            v.fly_to(st.target, dist)
+            v.fly_to(st.target, dist, st.pitch)
         self.tour_label.setText(st.text)
         self.tour_count.setText(f"{tr['title']}　{i + 1} / {len(tr['steps'])}")
         fly = v._fly["dur"] if v._fly else 0.0

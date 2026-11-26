@@ -242,7 +242,7 @@ class MinorPlanets:
         return int(np.count_nonzero(self.kind == kind))
 
     def vertex_data(self) -> np.ndarray:
-        """シェーダーに渡す: P(3) Q(3) a e M0 n 色(3)。"""
+        """シェーダーに渡す: P(3) Q(3) a e M0 n 色(3) 分類。"""
         col = np.array([k[2] for k in KINDS], np.float32)[self.kind]
         # 明るい（大きい）ものほど明るく、暗い小さなものはごく淡く描く（もやにならないように）
         h = np.where(self.h > 50, 13.0, self.h)
@@ -252,7 +252,8 @@ class MinorPlanets:
         br = np.minimum(br * boost, 6.0)
         br[self.kind == 7] = 2.5
         col *= br[:, None]
-        return np.column_stack([self.P, self.Q, self.a, self.e, self.m0, self.n, col]).astype(np.float32)
+        return np.column_stack([self.P, self.Q, self.a, self.e, self.m0, self.n, col,
+                                self.kind.astype(np.float32)]).astype(np.float32)
 
     def _anomaly(self, idx, jd):
         m = np.mod(self.m0[idx] + self.n[idx] * (jd - REF_JD), 2 * math.pi)

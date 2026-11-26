@@ -337,13 +337,17 @@ class SpaceView(QOpenGLWidget):
         self.update()
         return alt > 0
 
-    def fly_to(self, key: str, dist: float | None = None):
-        """ツアー用：その天体へ、指定した距離まで飛んでいく。"""
+    def fly_to(self, key: str, dist: float | None = None, pitch: float | None = None):
+        """ツアー用：その天体へ、指定した距離まで飛んでいく。pitch は見下ろす角度 [度]。"""
         if not self.valid_key(key):
             return
         self.selected_star = -1
         new_dist = dist if dist is not None else self._default_dist(key)
-        self._start_fly(key, max(new_dist, self._min_dist(key)), self._galaxy_view_dir(key))
+        view_dir = self._galaxy_view_dir(key)
+        if pitch is not None:
+            p = math.radians(pitch)
+            view_dir = np.array([math.cos(p) * math.cos(self.yaw), math.cos(p) * math.sin(self.yaw), math.sin(p)])
+        self._start_fly(key, max(new_dist, self._min_dist(key)), view_dir)
         self.target = key
         self.targetChanged.emit(key)
         self.update()
@@ -691,7 +695,7 @@ class SpaceView(QOpenGLWidget):
         if self.mp is None:
             return
         data = self.mp.vertex_data()
-        layout = [(0, 3), (1, 3), (2, 4), (3, 3)]
+        layout = [(0, 3), (1, 3), (2, 4), (3, 3), (4, 1)]
         if self.m_mp is None:
             self.m_mp = _Mesh(data, layout, GL_POINTS)
         else:
@@ -725,6 +729,7 @@ class SpaceView(QOpenGLWidget):
         focal = h / (2 * math.tan(math.radians(self._fov) / 2))
         d = max(min(sun_far, self.dist), 3.0)
         p.setUniformValue1f("u_gain", float(k * 0.083 * (12.0 / d) ** (0.8 if d < 12.0 else 1.5) * (focal / 1000.0) ** 2))
+        p.setUniformValue1f("u_far_gain", float(k * 0.06 * _smooth(25.0, 120.0, d) * (focal / 1000.0) ** 2))
         p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
         f.glBlendFunc(GL_ONE, GL_ONE)
         self.m_mp.draw(f)
