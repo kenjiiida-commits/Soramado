@@ -21,6 +21,7 @@ from . import smallbodies as sbs
 from . import cosmos
 from . import spacecraft as crafts
 from . import minorplanets as mpl
+from . import exoplanets as exo
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -218,11 +219,15 @@ class SpaceView(QOpenGLWidget):
         self.show_cmb = True
         self.qso_count = 0
         self.gcat = GalaxyCatalog()
+        self.show_exo = True
+        self.exo = exo.load()        # 系外惑星（ダウンロードしたとき）
+        self._exo_orbits = {}        # 惑星系の番号 → 軌道の線のリスト
         self.show_minor = True
         self.mp = mpl.load()         # たくさんの小惑星・彗星（ダウンロードしたとき）
         self.m_mp = None
         self.m_mp_orbit = None
         self._mp_orbit_i = -1
+        self._exo_screen = None
 
         # 地上モード（プラネタリウム）
         self.ground = False
@@ -276,8 +281,17 @@ class SpaceView(QOpenGLWidget):
         except ValueError:
             return False
 
+    def is_exo(self, key: str) -> bool:
+        if not key.startswith("x:") or self.exo is None:
+            return False
+        try:
+            return 0 <= int(key[2:]) < len(self.exo)
+        except ValueError:
+            return False
+
     def valid_key(self, key: str) -> bool:
-        return key in BY_KEY or self.is_galaxy(key) or key in crafts.BY_KEY or self.is_minor(key)
+        return (key in BY_KEY or self.is_galaxy(key) or key in crafts.BY_KEY or self.is_minor(key)
+                or self.is_exo(key))
 
     def is_galaxy(self, key: str) -> bool:
         return key in gx.BY_KEY or key.startswith("c:") or key == "u:cmb"
@@ -409,6 +423,10 @@ class SpaceView(QOpenGLWidget):
     def display_radius(self, key: str) -> float:
         if key in crafts.BY_KEY:
             return 1e-10
+        if key.startswith("x:"):
+            if self.exo is None:
+                return 1e-3
+            return (self.exo.systems[int(key[2:])]["srad"] or 1.0) * 695700.0 * KM
         if key.startswith("mp:"):
             d = self.mp.diameter_km(int(key[3:])) if self.mp is not None else 0.0
             return max(d, 1.0) / 2 * KM * self.magnify
@@ -455,6 +473,10 @@ class SpaceView(QOpenGLWidget):
     def display_pos(self, key: str) -> np.ndarray:
         if key in crafts.BY_KEY:
             return self.craft_pos(key)
+        if key.startswith("x:"):
+            if self.exo is None:
+                return self.positions["sun"]
+            return self.exo.pos[int(key[2:])]
         if key.startswith("mp:"):
             if self.mp is None:
                 return self.positions["sun"]
@@ -474,6 +496,8 @@ class SpaceView(QOpenGLWidget):
     def _min_dist(self, key):
         if key in crafts.BY_KEY:
             return 1e-6
+        if key.startswith("x:"):
+            return self.display_radius(key) * 1.5
         if key.startswith("mp:"):
             return max(1e-6, self.display_radius(key) * 1.15)
         if key == "u:cmb":
@@ -483,6 +507,8 @@ class SpaceView(QOpenGLWidget):
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
+        if key.startswith("x:") and self.exo is not None:
+            return max(self.exo.system_size(int(key[2:])) * 3.0, 0.05)
         if key.startswith("mp:"):
             # 軌道の形と、まわりの小惑星が見えるくらいの距離から
             r = float(np.linalg.norm(self.display_pos(key)))
@@ -698,6 +724,158 @@ class SpaceView(QOpenGLWidget):
         else:
             self.m_qso.update(data)
         self.qso_count = len(data)
+
+    def _draw_glow(self, f, viewproj, w, h, rel, radius_au, absmag, color):
+        """恒星の光芒（太陽や、よその惑星系の恒星）。"""
+        clip = viewproj @ np.append(rel, 1.0)
+        if clip[3] <= 0:
+            return
+        ndc = clip[:2] / clip[3]
+        pix_per_ndc = h / 2
+        core_px = radius_au / clip[3] * (1 / math.tan(math.radians(self._fov) / 2)) * pix_per_ndc
+        # 離れると暗い星になる
+        m = absmag + 5 * math.log10(max(clip[3], 1e-9) / 206264.806 / 10.0)
+        li = -0.4 * (m - self.limit_mag)
+        glow_px = max(core_px * 3.0, min(28.0, 2.5 + 2.2 * li))
+        glow_k = min(1.0, 0.3 + 0.35 * li)
+        if glow_px <= 1.5:
+            return
+        f.glBlendFunc(GL_ONE, GL_ONE)
+        p = self.p_glow
+        p.bind()
+        p.setUniformValue("u_center", QVector2D(*ndc))
+        p.setUniformValue("u_size", QVector2D(glow_px / (w / 2), glow_px / (h / 2)))
+        p.setUniformValue("u_color", QVector3D(color[0] * glow_k, color[1] * glow_k, color[2] * glow_k))
+        p.setUniformValue1f("u_core", float(min(core_px / glow_px, 0.9)))
+        depth = math.log2(1.0 + LOGC * clip[3]) / math.log2(FAR_AU * LOGC + 1.0)
+        p.setUniformValue1f("u_depth", float(depth))
+        self.m_glow.draw(f)
+        p.release()
+        f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    def _exo_near(self) -> int:
+        """いま見ている、よその惑星系の番号（なければ -1）。"""
+        if not self.is_exo(self.target) or self.ground:
+            return -1
+        i = int(self.target[2:])
+        if np.linalg.norm(self.exo.pos[i] - self._eye) > max(self.exo.system_size(i) * 400.0, 200.0):
+            return -1
+        return i
+
+    def _draw_exo_system(self, f, viewproj, w, h):
+        i = self._exo_near()
+        if i < 0:
+            return
+        s = self.exo.systems[i]
+        rel = self.exo.pos[i] - self._eye
+        self._draw_glow(f, viewproj, w, h, rel, self.display_radius(self.target), s["absmag"],
+                        exo.temp_color(s["teff"]))
+        if not self.show_orbits:
+            return
+        if i not in self._exo_orbits:
+            meshes = []
+            for k in range(len(s["planets"])):
+                pts = self.exo.orbit_path(i, k)
+                meshes.append(None if pts is None else _Mesh(pts, [(0, 3)], GL_LINE_STRIP))
+            self._exo_orbits[i] = meshes
+        p = self.p_line
+        p.bind()
+        self._common(p, viewproj)
+        p.setUniformValue("u_offset", QVector3D(*rel))
+        p.setUniformValue1f("u_scale", 1.0)
+        for k, m in enumerate(self._exo_orbits[i]):
+            if m is None:
+                continue
+            pl = s["planets"][k]
+            col = (0.35, 0.95, 0.45) if self.exo.in_hz(pl) else exo.TYPES[exo.TYPE_INDEX[pl["type"]]][2]
+            p.setUniformValue("u_color", QVector4D(*col, 0.55))
+            m.draw(f)
+        p.release()
+
+    def reload_exo(self):
+        self.exo = exo.load()
+        self._exo_orbits = {}
+        self.update()
+
+    def pick_exo(self, x, y, radius=9.0) -> int:
+        if self.exo is None or not self.show_exo or self.ground or not len(self.exo):
+            return -1
+        pr = self._exo_screen
+        if pr is None:
+            return -1
+        idx, sx, sy = pr
+        d2 = (sx - x) ** 2 + (sy - y) ** 2
+        j = int(np.argmin(d2)) if len(d2) else -1
+        return int(idx[j]) if j >= 0 and d2[j] < radius * radius else -1
+
+    def _draw_exo_markers(self, painter, viewproj, w, h, placed, fm):
+        """系外惑星を持つ恒星の印（緑の丸）と、近い恒星の名前。"""
+        self._exo_screen = None
+        if self.exo is None or not self.show_exo or self.ground or not len(self.exo):
+            return
+        rel = self.exo.pos - self._eye
+        clip = np.column_stack([rel, np.ones(len(rel))]) @ viewproj.T
+        ok = clip[:, 3] > 0
+        cw = np.where(ok, clip[:, 3], 1.0)
+        sx = (clip[:, 0] / cw * 0.5 + 0.5) * w
+        sy = (0.5 - clip[:, 1] / cw * 0.5) * h
+        ok &= (sx > -10) & (sx < w + 10) & (sy > -10) & (sy < h + 10)
+        dist = np.linalg.norm(rel, axis=1)
+        # 太陽系の中から見るときは、空いっぱいに散らばるので、近い恒星（約300光年まで）にしぼる
+        sun_far = self._sun_far
+        limit = max(300 * exo.LY_AU, sun_far * 3.0)
+        ok &= dist < limit
+        cur = self._exo_near()
+        if cur >= 0:
+            ok[cur] = False          # 見ている惑星系そのものには印をつけない
+        idx = np.nonzero(ok)[0]
+        if len(idx) > 2500:
+            idx = idx[np.argsort(dist[idx])[:2500]]
+        self._exo_screen = (idx, sx[idx], sy[idx])
+        painter.setBrush(Qt.NoBrush)
+        pen = QPen(QColor(90, 230, 130, 150), 1.0)
+        painter.setPen(pen)
+        for j in idx:
+            painter.drawEllipse(QPointF(sx[j], sy[j]), 3.5, 3.5)
+        # 名前：近いものから（ほかの名前と重ならないものだけ）
+        painter.setPen(QColor(120, 235, 150, 210))
+        shown = 0
+        max_labels = 0 if cur >= 0 else 12      # よその惑星系の中にいるときは、ほかの恒星の名前は出さない
+        for j in idx[np.argsort(dist[idx])]:
+            if shown >= max_labels:
+                break
+            name = self.exo.name(int(j))
+            rect = fm.boundingRect(name).translated(int(sx[j] + 6), int(sy[j] + 4))
+            if any(rect.intersects(r) for r in placed):
+                continue
+            placed.append(rect)
+            painter.drawText(QPointF(sx[j] + 6, sy[j] + 4), name)
+            shown += 1
+
+    def _draw_exo_planets(self, painter, viewproj, w, h, placed, fm):
+        """見ている惑星系の、惑星の点と名前。"""
+        i = self._exo_near()
+        if i < 0:
+            return
+        s = self.exo.systems[i]
+        host = self.exo.pos[i] - self._eye
+        pr = self._project(host, viewproj, w, h)
+        if pr:
+            painter.setPen(QColor(255, 240, 200))
+            painter.drawText(QPointF(pr[0] + 10, pr[1] - 8), s["host"])
+        for pl, off in zip(s["planets"], self.exo.planet_offsets(i, self.jd)):
+            if off is None:
+                continue
+            q = self._project(host + off, viewproj, w, h)
+            if not q or not (0 < q[0] < w and 0 < q[1] < h):
+                continue
+            col = exo.TYPES[exo.TYPE_INDEX[pl["type"]]][2]
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor.fromRgbF(*col))
+            painter.drawEllipse(QPointF(q[0], q[1]), 3.5, 3.5)
+            label = pl["letter"] or pl["name"]
+            painter.setPen(QColor(120, 235, 150) if self.exo.in_hz(pl) else QColor.fromRgbF(*col))
+            painter.drawText(QPointF(q[0] + 6, q[1] + 4), label)
 
     def _load_minor(self):
         if self.mp is None:
@@ -1034,6 +1212,8 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
             p.setUniformValue1f("u_gain", float(0.3 + 0.7 * night))
             p.setUniformValue1i("u_hide_unknown", int(sun_far > 3000.0))
+            # よその惑星系のそばでは、カタログの星の位置の誤差（数AU）が目立つので、すぐ近くの星は描かない
+            p.setUniformValue1f("u_near", float(30000.0 if (self.is_exo(self.target) and sun_far > 1e5) else 0.0))
             self.m_stars.draw(f)
             p.release()
         f.glDisable(GL_BLEND)
@@ -1178,28 +1358,10 @@ class SpaceView(QOpenGLWidget):
             p.release()
 
         # ---- 太陽の光芒
-        clip = viewproj @ np.append(sun_rel, 1.0)
-        if clip[3] > 0:
-            ndc = clip[:2] / clip[3]
-            pix_per_ndc = h / 2
-            core_px = self.display_radius("sun") / clip[3] * (1 / math.tan(math.radians(self._fov) / 2)) * pix_per_ndc
-            # 太陽の明るさ（離れると暗い星になる）: 絶対等級 4.83
-            m_sun = 4.83 + 5 * math.log10(max(clip[3], 1e-9) / 206264.806 / 10.0)
-            li = -0.4 * (m_sun - self.limit_mag)
-            glow_px = max(core_px * 3.0, min(28.0, 2.5 + 2.2 * li))
-            glow_k = min(1.0, 0.3 + 0.35 * li)
-        if clip[3] > 0 and glow_px > 1.5:
-            f.glBlendFunc(GL_ONE, GL_ONE)
-            p = self.p_glow
-            p.bind()
-            p.setUniformValue("u_center", QVector2D(*ndc))
-            p.setUniformValue("u_size", QVector2D(glow_px / (w / 2), glow_px / (h / 2)))
-            p.setUniformValue("u_color", QVector3D(1.0 * glow_k, 0.78 * glow_k, 0.45 * glow_k))
-            p.setUniformValue1f("u_core", float(min(core_px / glow_px, 0.9)))
-            depth = math.log2(1.0 + LOGC * clip[3]) / math.log2(FAR_AU * LOGC + 1.0)
-            p.setUniformValue1f("u_depth", float(depth))
-            self.m_glow.draw(f)
-            p.release()
+        self._draw_glow(f, viewproj, w, h, sun_rel, self.display_radius("sun"), 4.83, (1.0, 0.78, 0.45))
+
+        # ---- よその惑星系（選んでいるとき）
+        self._draw_exo_system(f, viewproj, w, h)
 
         f.glDepthMask(True)
         f.glDisable(GL_BLEND)
@@ -1291,6 +1453,8 @@ class SpaceView(QOpenGLWidget):
             self._draw_craft(painter, viewproj, w, h, placed, fm)
         if self.is_minor(self.target):
             self._draw_minor_marker(painter, viewproj, w, h, placed, fm)
+        self._draw_exo_planets(painter, viewproj, w, h, placed, fm)
+        self._draw_exo_markers(painter, viewproj, w, h, placed, fm)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
         painter.end()
@@ -1624,6 +1788,10 @@ class SpaceView(QOpenGLWidget):
                 best, best_d = key, dd
         if best:
             self.set_target(best)
+            return
+        xi = self.pick_exo(x, y)
+        if xi >= 0:
+            self.set_target(f"x:{xi}")
             return
         mi = self.pick_minor(x, y)
         if mi >= 0:

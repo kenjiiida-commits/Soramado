@@ -25,6 +25,7 @@ from . import cosmos
 from . import spacecraft as crafts
 from . import recorder
 from . import minorplanets as mpl
+from . import exoplanets as exo
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -71,7 +72,7 @@ HELP_TEXT = """<h3>操作方法</h3>
 <tr><td><b>F11</b></td><td>全画面表示</td></tr>
 <tr><td><b>Ctrl+S</b></td><td>画面を画像で保存（ピクチャ/Soramado）</td></tr>
 <tr><td><b>Ctrl+R</b></td><td>録画の開始・停止（ビデオ/Soramado、ffmpeg が必要）</td></tr>
-<tr><td><b>Ctrl+F</b></td><td>小惑星・彗星を名前や番号で探す（データのダウンロードが必要）</td></tr>
+<tr><td><b>Ctrl+F</b></td><td>小惑星・彗星・系外惑星を名前や番号で探す（データのダウンロードが必要）</td></tr>
 </table>
 <p><b>地上から見る（プラネタリウム）</b></p>
 <table cellpadding="3">
@@ -289,6 +290,12 @@ class MainWindow(QMainWindow):
         act_mpf = QAction("小惑星・彗星のデータを手元のファイルから読み込む…", self)
         act_mpf.triggered.connect(self._load_minor_files)
         m_file.addAction(act_mpf)
+        act_exo = QAction("系外惑星のデータをダウンロード…", self)
+        act_exo.triggered.connect(lambda: self._download_exo(None))
+        m_file.addAction(act_exo)
+        act_exof = QAction("系外惑星のデータを手元のファイル（CSV）から読み込む…", self)
+        act_exof.triggered.connect(self._load_exo_file)
+        m_file.addAction(act_exof)
         m_file.addSeparator()
         act_quit = QAction("終了", self)
         act_quit.setShortcut(QKeySequence.Quit)
@@ -310,7 +317,8 @@ class MainWindow(QMainWindow):
         self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
         self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
         self.act_minor = self._toggle(m_view, "たくさんの小惑星・彗星（ダウンロードしたもの）", "show_minor")
-        act_find = QAction("小惑星・彗星を探す…", self)
+        self.act_exo = self._toggle(m_view, "系外惑星を持つ恒星（ダウンロードしたもの）", "show_exo")
+        act_find = QAction("小惑星・彗星・系外惑星を探す…", self)
         act_find.setShortcut(QKeySequence("Ctrl+F"))
         act_find.triggered.connect(self._find_minor)
         m_view.addAction(act_find)
@@ -360,7 +368,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo")
 
     def _restore_settings(self):
         st = self.settings
@@ -373,7 +381,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
@@ -583,19 +591,68 @@ class MainWindow(QMainWindow):
         dl.start()
         timer.start(200)
 
+    def _load_exo_file(self):
+        f, _ = QFileDialog.getOpenFileName(self, "NASA Exoplanet Archive の表（CSV）を選ぶ", str(Path.home() / "ダウンロード"),
+                                           "CSV (*.csv);;すべてのファイル (*)")
+        if f:
+            self._download_exo(f)
+
+    def _download_exo(self, file):
+        if getattr(self, "_exo_dl", None):
+            return
+        if file is None:
+            ans = QMessageBox.question(
+                self, "系外惑星のデータ",
+                "NASA Exoplanet Archive から、これまでに見つかった系外惑星（約6千個）の表をダウンロードします。"
+                "\n\n通信量は約1〜2MBです。よろしいですか？")
+            if ans != QMessageBox.Yes:
+                return
+        dl = exo.ExoplanetDownloader(file)
+        dlg = QProgressDialog("系外惑星のデータを読み込んでいます…", "キャンセル", 0, 0, self)
+        dlg.setWindowTitle("系外惑星のデータ")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.canceled.connect(dl.cancel)
+        timer = QTimer(self)
+
+        def poll():
+            if dl.bytes:
+                dlg.setLabelText(f"系外惑星のデータをダウンロードしています…\n{dl.bytes / 1e6:,.2f} MB")
+            if not dl.done:
+                return
+            timer.stop()
+            dlg.close()
+            self._exo_dl = None
+            if dl.ok:
+                self.view.reload_exo()
+                QMessageBox.information(
+                    self, "系外惑星のデータ",
+                    f"{dl.count:,} 個の恒星をまわる、{dl.planets:,} 個の系外惑星を読み込みました。\n\n"
+                    "系外惑星を持つ恒星には緑の丸が付きます。ダブルクリックすると、その惑星系へ飛んでいけます。\n"
+                    "Ctrl+F で、恒星や惑星の名前（例: TRAPPIST-1、Proxima Cen、51 Peg）から探せます。")
+            else:
+                QMessageBox.warning(
+                    self, "系外惑星のデータ", "読み込めませんでした。\n\n" + dl.message +
+                    "\n\nブラウザーで次のアドレスを開いて CSV を保存し、「ファイル」→「系外惑星のデータを手元の"
+                    f"ファイル（CSV）から読み込む」で選ぶこともできます。\n{exo.URL}")
+
+        timer.timeout.connect(poll)
+        self._exo_dl = (dl, timer, dlg)
+        dl.start()
+        timer.start(200)
+
     def _find_minor(self):
-        mp = self.view.mp
-        if mp is None:
-            ans = QMessageBox.question(self, "小惑星・彗星を探す",
-                                       "まだ小惑星・彗星のデータがありません。ダウンロードしますか？")
-            if ans == QMessageBox.Yes:
-                self._download_minor(None)
+        mp, ex = self.view.mp, self.view.exo
+        if mp is None and ex is None:
+            QMessageBox.information(self, "小惑星・彗星・系外惑星を探す",
+                                    "まだデータがありません。「ファイル」メニューから、小惑星・彗星や"
+                                    "系外惑星のデータをダウンロードしてください。")
             return
         dlg = QDialog(self)
-        dlg.setWindowTitle("小惑星・彗星を探す")
-        dlg.resize(420, 420)
+        dlg.setWindowTitle("小惑星・彗星・系外惑星を探す")
+        dlg.resize(460, 440)
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("名前（英語）か番号を入れてください。例: Itokawa、Ryugu、433、Halley"))
+        lay.addWidget(QLabel("名前（英語）か番号を入れてください。\n例: Itokawa、Ryugu、433、Halley、TRAPPIST-1、Proxima Cen"))
         ed = QLineEdit()
         lay.addWidget(ed)
         lst = QListWidget()
@@ -603,10 +660,17 @@ class MainWindow(QMainWindow):
 
         def search():
             lst.clear()
-            for i in mp.find(ed.text()):
-                it = QListWidgetItem(f"{mp.name(i)}　（{mp.kind_name(i)}）")
-                it.setData(Qt.UserRole, i)
-                lst.addItem(it)
+            if ex is not None:
+                for i in ex.find(ed.text()):
+                    n = len(ex.systems[i]["planets"])
+                    it = QListWidgetItem(f"{ex.name(i)}　（系外惑星 {n} 個を持つ恒星）")
+                    it.setData(Qt.UserRole, f"x:{i}")
+                    lst.addItem(it)
+            if mp is not None:
+                for i in mp.find(ed.text()):
+                    it = QListWidgetItem(f"{mp.name(i)}　（{mp.kind_name(i)}）")
+                    it.setData(Qt.UserRole, f"mp:{i}")
+                    lst.addItem(it)
             if lst.count():
                 lst.setCurrentRow(0)
 
@@ -615,7 +679,7 @@ class MainWindow(QMainWindow):
             if item is None:
                 return
             dlg.accept()
-            self.view.set_target(f"mp:{item.data(Qt.UserRole)}")
+            self.view.set_target(item.data(Qt.UserRole))
 
         ed.textChanged.connect(search)
         ed.returnPressed.connect(go)
@@ -674,6 +738,24 @@ class MainWindow(QMainWindow):
                     mark = "✔ " if jd_e <= v.jd else ""
                     html.append(f"<li>{mark}{d.year}年{d.month}月{d.day}日　{txt}</li>")
                 html.append("</ul><p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
+            elif v.is_exo(t):
+                i = int(t[2:])
+                sy = v.exo.systems[i]
+                html.append(f"<h2>{sy['host']}</h2>")
+                html.append("<p>" + "<br>".join(v.exo.describe_system(i)) + "</p>")
+                for pl in sy["planets"]:
+                    hz = v.exo.in_hz(pl)
+                    col = "#7deb96" if hz else "#ddd"
+                    html.append(f"<p><b style='color:{col}'>{pl['name']}</b><br>{exo.describe_planet(pl)}"
+                                + ("<br><span style='color:#7deb96'>ハビタブルゾーン（水が液体でいられるかもしれない"
+                                   "範囲）の中にあります</span>" if hz else "") + "</p>")
+                methods = {pl["method"] for pl in sy["planets"]}
+                for m in methods:
+                    if m in exo.METHOD_NOTE:
+                        html.append(f"<p><b>{exo.METHOD_JA[m]}</b>：{exo.METHOD_NOTE[m]}</p>")
+                html.append("<p style='color:#888'>データは NASA Exoplanet Archive によります。惑星の軌道の向きと、"
+                            "軌道上の位置は模式です（地球から見て真横を向いているように描いています）。"
+                            "緑の軌道はハビタブルゾーンの中の惑星です。</p>")
             elif v.is_minor(t):
                 i = int(t[3:])
                 html.append(f"<h2>{v.mp.name(i)}</h2>")
@@ -937,6 +1019,14 @@ class MainWindow(QMainWindow):
                           f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}",
                           f"最近のできごと: {crafts.last_event(sc, v.jd)}"]
             parts.append("※ 航路はおおよそ")
+            self.status_info.setText("　｜　".join(parts))
+            self._refresh_warn(v)
+            return
+        if v.is_exo(key):
+            i = int(key[2:])
+            parts = [f"<b>{v.exo.name(i)}</b>"] + v.exo.describe_system(i)
+            surface = v.dist - v.display_radius(key)
+            parts.append(f"視点の距離 {_fmt_dist(max(surface, 0.0))}（恒星から）")
             self.status_info.setText("　｜　".join(parts))
             self._refresh_warn(v)
             return

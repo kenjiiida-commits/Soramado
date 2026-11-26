@@ -195,11 +195,12 @@ uniform float u_limit;                // 見える限界の等級
 uniform float u_px;                   // 画面の拡大率（高解像度画面用）
 uniform float u_gain;                 // 星の明るさの調整
 uniform int u_hide_unknown;           // 距離不明の星を隠す（太陽系から遠く離れたとき）
+uniform float u_near;                 // これより近い星は描かない（よその惑星系を見ているとき。位置の誤差が大きいので）
 out vec3 v_col;
 void main() {
     vec3 rel = a_pos - u_eye;
     float d = max(length(rel), 1e-6);
-    if (u_hide_unknown == 1 && a_dist > 1.5e10) {
+    if ((u_hide_unknown == 1 && a_dist > 1.5e10) || d < u_near) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         gl_PointSize = 0.0;
         v_col = vec3(0.0);
