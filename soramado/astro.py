@@ -237,3 +237,60 @@ def pole_vector(ra_deg: float, dec_deg: float) -> np.ndarray:
 def rotation_angle(jd: float, w0_deg: float, w_rate_deg_per_day: float) -> float:
     """IAU の自転角 W（本初子午線の位置）[度]。"""
     return (w0_deg + w_rate_deg_per_day * (jd - JD_J2000)) % 360.0
+
+
+# ---------------------------------------------------------------- 地上の観測者
+
+def gmst_deg(jd: float) -> float:
+    """グリニッジ平均恒星時 [度]（UTC を UT1 とみなす）。"""
+    t = (jd - JD_J2000) / 36525.0
+    g = (280.46061837 + 360.98564736629 * (jd - JD_J2000)
+         + 0.000387933 * t * t - t * t * t / 38710000.0)
+    return g % 360.0
+
+
+def precession_matrix(jd: float) -> np.ndarray:
+    """J2000 の赤道座標 → その日の平均赤道座標 の回転行列（IAU 1976）。"""
+    t = (jd - JD_J2000) / 36525.0
+    asec = math.pi / 180.0 / 3600.0
+    zeta = (2306.2181 * t + 0.30188 * t * t + 0.017998 * t ** 3) * asec
+    z = (2306.2181 * t + 1.09468 * t * t + 0.018203 * t ** 3) * asec
+    theta = (2004.3109 * t - 0.42665 * t * t - 0.041833 * t ** 3) * asec
+
+    def rz(a):
+        c, s = math.cos(a), math.sin(a)
+        return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+    def ry(a):
+        c, s = math.cos(a), math.sin(a)
+        return np.array([[c, 0, -s], [0, 1, 0], [s, 0, c]])
+
+    return rz(z) @ ry(theta) @ rz(zeta)
+
+
+def observer_frame(jd: float, lat_deg: float, lon_deg: float):
+    """地上の観測者の位置と向き（すべて J2000 黄道座標）。
+
+    戻り値: (地球中心から観測者までのベクトル[AU], 天頂, 北, 東) の単位ベクトル
+    """
+    lst = math.radians(gmst_deg(jd) + lon_deg)
+    lat = math.radians(lat_deg)
+    # その日の赤道座標での天頂と天の北極
+    zen_date = np.array([math.cos(lat) * math.cos(lst), math.cos(lat) * math.sin(lst), math.sin(lat)])
+    pole_date = np.array([0.0, 0.0, 1.0])
+    p_inv = precession_matrix(jd).T          # その日 → J2000
+    zen = equatorial_to_ecliptic(p_inv @ zen_date)
+    pole = equatorial_to_ecliptic(p_inv @ pole_date)
+    east = np.cross(pole, zen)
+    east /= np.linalg.norm(east)
+    north = np.cross(zen, east)
+    offset = zen * (EARTH_RADIUS_KM / AU_KM)
+    return offset, zen, north, east
+
+
+def alt_az(direction: np.ndarray, zen, north, east):
+    """方向ベクトル → (高度, 方位) [度]。方位は北=0、東=90。"""
+    d = direction / np.linalg.norm(direction)
+    alt = math.degrees(math.asin(max(-1.0, min(1.0, float(np.dot(d, zen))))))
+    az = math.degrees(math.atan2(float(np.dot(d, east)), float(np.dot(d, north)))) % 360.0
+    return alt, az

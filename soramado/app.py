@@ -9,7 +9,8 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QLabel, QMainWindow,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox,
+                               QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QToolBar,
                                QWidget, QHBoxLayout, QSizePolicy)
 
@@ -31,6 +32,12 @@ SPEEDS = [
 ]
 DEFAULT_SPEED = 5   # 1日/秒
 
+PLACES = [
+    ("札幌", 43.06, 141.35), ("仙台", 38.27, 140.87), ("東京", 35.68, 139.77),
+    ("三鷹（国立天文台）", 35.67, 139.54), ("名古屋", 35.18, 136.91), ("大阪", 34.69, 135.50),
+    ("広島", 34.39, 132.46), ("福岡", 33.59, 130.40), ("那覇", 26.21, 127.68),
+]
+
 TARGET_ORDER = ["sun", "mercury", "venus", "earth", "moon", "mars",
                 "jupiter", "saturn", "uranus", "neptune"]
 
@@ -42,6 +49,12 @@ HELP_TEXT = """<h3>操作方法</h3>
 <tr><td><b>スペース</b></td><td>時間を止める・動かす</td></tr>
 <tr><td><b>+ / −</b></td><td>近づく・離れる</td></tr>
 <tr><td><b>F11</b></td><td>全画面表示</td></tr>
+</table>
+<p><b>地上から見る（プラネタリウム）</b></p>
+<table cellpadding="3">
+<tr><td><b>左ドラッグ</b></td><td>見る方向を変える</td></tr>
+<tr><td><b>ホイール</b> / <b>右ドラッグ</b></td><td>視野を広く・狭く（望遠鏡のように拡大）</td></tr>
+<tr><td><b>見る天体</b></td><td>その天体の方を向く</td></tr>
 </table>
 <p>「惑星の大きさ」を上げると、惑星を実際より大きく描きます（太陽は最大10倍）。
 実寸（×1）では、遠くから見ると惑星は点と名前だけになります。</p>
@@ -83,6 +96,7 @@ class MainWindow(QMainWindow):
         self._download = None
 
         QTimer.singleShot(600, self._maybe_offer_download)
+        self._restore_place()
 
     # ---------------------------------------------------------- 画面の部品
 
@@ -103,9 +117,21 @@ class MainWindow(QMainWindow):
         self.cb_target.activated.connect(lambda i: self.view.set_target(self.cb_target.itemData(i)))
         tb.addWidget(self.cb_target)
 
-        btn_all = QPushButton("全体を見る")
-        btn_all.clicked.connect(self.view.overview)
-        tb.addWidget(btn_all)
+        self.btn_all = QPushButton("全体を見る")
+        self.btn_all.clicked.connect(self.view.overview)
+        tb.addWidget(self.btn_all)
+        tb.addSeparator()
+
+        self.btn_ground = QPushButton("🔭 地上から見る")
+        self.btn_ground.setCheckable(True)
+        self.btn_ground.toggled.connect(self._on_ground)
+        tb.addWidget(self.btn_ground)
+        self.cb_place = QComboBox()
+        for name, lat, lon in PLACES:
+            self.cb_place.addItem(name, (name, lat, lon))
+        self.cb_place.addItem("緯度・経度を入力…", None)
+        self.cb_place.activated.connect(self._on_place)
+        tb.addWidget(self.cb_place)
         tb.addSeparator()
 
         self.btn_play = QPushButton("⏸ 停止")
@@ -213,6 +239,75 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------- 動作
 
+    # ---------------------------------------------------------- 地上モード
+
+    def _on_ground(self, on):
+        self.view.set_ground(on)
+        self.btn_all.setEnabled(not on)
+        self.sl_mag.setEnabled(not on)
+        self.btn_ground.setText("🚀 宇宙へ戻る" if on else "🔭 地上から見る")
+        # 1日/秒より速いと空がぐるぐる回って見づらいので、地上では少しゆっくりにする
+        if on and self.cb_speed.currentIndex() > 3:
+            self.cb_speed.setCurrentIndex(1)
+        self.view.setFocus()
+
+    def _restore_place(self):
+        name = self.settings.value("place/name", "大阪")
+        lat = float(self.settings.value("place/lat", 34.69))
+        lon = float(self.settings.value("place/lon", 135.50))
+        self.view.set_place(name, lat, lon)
+        i = self.cb_place.findText(name)
+        if i < 0:
+            self.cb_place.insertItem(self.cb_place.count() - 1, name, (name, lat, lon))
+            i = self.cb_place.findText(name)
+        self.cb_place.setCurrentIndex(i)
+
+    def _on_place(self, i):
+        data = self.cb_place.itemData(i)
+        if data is None:
+            data = self._ask_place()
+            if data is None:
+                self.cb_place.setCurrentIndex(self.cb_place.findText(self.view.place))
+                return
+            j = self.cb_place.findText(data[0])
+            if j < 0:
+                self.cb_place.insertItem(self.cb_place.count() - 1, data[0], data)
+                j = self.cb_place.findText(data[0])
+            else:
+                self.cb_place.setItemData(j, data)
+            self.cb_place.setCurrentIndex(j)
+        name, lat, lon = data
+        self.view.set_place(name, lat, lon)
+        self.settings.setValue("place/name", name)
+        self.settings.setValue("place/lat", lat)
+        self.settings.setValue("place/lon", lon)
+
+    def _ask_place(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("観測地")
+        form = QFormLayout(dlg)
+        ed_name = QLineEdit("観測地")
+        sp_lat = QDoubleSpinBox()
+        sp_lat.setRange(-90, 90)
+        sp_lat.setDecimals(3)
+        sp_lat.setValue(self.view.lat)
+        sp_lat.setSuffix("°（北緯が＋）")
+        sp_lon = QDoubleSpinBox()
+        sp_lon.setRange(-180, 180)
+        sp_lon.setDecimals(3)
+        sp_lon.setValue(self.view.lon)
+        sp_lon.setSuffix("°（東経が＋）")
+        form.addRow("名前", ed_name)
+        form.addRow("緯度", sp_lat)
+        form.addRow("経度", sp_lon)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        form.addRow(bb)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return (ed_name.text().strip() or "観測地", sp_lat.value(), sp_lon.value())
+
     def _toggle(self, menu, label, attr):
         act = QAction(label, self, checkable=True, checked=getattr(self.view, attr))
 
@@ -278,6 +373,22 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         key = v.target
+        if v.ground:
+            parts = [f"<b>地上から見た空</b>（{v.place}　北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）"]
+            sun_alt, _ = v.ground_altaz("sun")
+            if sun_alt > 0:
+                parts.append(f"太陽の高度 {sun_alt:.0f}°（昼）")
+            elif sun_alt > -18:
+                parts.append(f"太陽の高度 {sun_alt:.0f}°（薄明）")
+            else:
+                parts.append("夜")
+            if key in BY_KEY and key not in ("earth",):
+                alt, az = v.ground_altaz(key)
+                where = f"高度 {alt:.1f}°・方位 {az:.0f}°" if alt > 0 else "地平線の下"
+                parts.append(f"{BY_KEY[key].name}: {where}")
+            self.status_info.setText("　｜　".join(parts))
+            self._refresh_warn(v)
+            return
         if key.startswith("c:"):
             self.status_info.setText(v.gcat.describe(int(key[2:])) + "　｜　視点の距離 "
                                      + format_length(v.dist))

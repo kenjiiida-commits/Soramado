@@ -344,3 +344,59 @@ void main() {
     frag = vec4(v_col * val * edge, 1.0);
 }
 """
+
+# ---------------------------------------------------------------- 地上モードの空と地面（画面全体に描く）
+SKY_VS = """#version 330 core
+layout(location=0) in vec2 a_corner;
+out vec2 v_ndc;
+void main() {
+    v_ndc = a_corner;
+    gl_Position = vec4(a_corner, 0.0, 1.0);
+}
+"""
+
+SKY_FS = """#version 330 core
+in vec2 v_ndc;
+uniform vec3 u_fwd;
+uniform vec3 u_right;
+uniform vec3 u_up;
+uniform float u_tx;        // tan(視野/2) × 縦横比
+uniform float u_ty;        // tan(視野/2)
+uniform vec3 u_zen;        // 天頂
+uniform vec3 u_sun;        // 太陽の方向
+uniform float u_sunalt;    // 太陽の高度 [度]
+uniform int u_mode;        // 0=空, 1=地面
+out vec4 frag;
+void main() {
+    vec3 ray = normalize(u_fwd + v_ndc.x * u_tx * u_right + v_ndc.y * u_ty * u_up);
+    float alt = dot(ray, u_zen);
+    float day = smoothstep(-6.0, 8.0, u_sunalt);
+    float twi = smoothstep(-18.0, -3.0, u_sunalt);
+    if (u_mode == 1) {
+        if (alt >= 0.0) discard;
+        vec3 g = mix(vec3(0.012, 0.016, 0.012), vec3(0.16, 0.20, 0.12), day);
+        g += vec3(0.05, 0.03, 0.02) * twi * (1.0 - day);
+        // 地平線のすぐ下を少し明るく（地平線が分かるように）
+        g += vec3(0.06, 0.07, 0.06) * exp(alt * 60.0) * (0.3 + 0.7 * twi);
+        frag = vec4(g, 1.0);
+        return;
+    }
+    if (alt < -0.02) discard;
+    float a = max(alt, 0.0);
+    vec3 night = vec3(0.0);
+    vec3 dusk = vec3(0.04, 0.06, 0.14);
+    vec3 noon = mix(vec3(0.55, 0.72, 0.95), vec3(0.18, 0.40, 0.85), pow(a, 0.5));
+    vec3 col = mix(night, dusk, twi);
+    col = mix(col, noon, day);
+    // 太陽のまわりの明るさ（昼）と、夕焼け・朝焼け（太陽が低いとき）
+    vec3 sunh = normalize(u_sun - u_zen * dot(u_sun, u_zen) + vec3(1e-6));
+    vec3 rayh = normalize(ray - u_zen * alt + vec3(1e-6));
+    float toward = max(dot(rayh, sunh), 0.0);
+    float near = max(dot(ray, u_sun), 0.0);
+    col += vec3(1.0, 0.9, 0.7) * pow(near, 60.0) * 0.6 * day;
+    float low = 1.0 - smoothstep(-12.0, 10.0, abs(u_sunalt - 1.0));
+    col += vec3(1.0, 0.45, 0.15) * exp(-a * 9.0) * pow(toward, 3.0) * low * 0.8;
+    col += vec3(0.25, 0.12, 0.20) * exp(-a * 4.0) * low * 0.3;
+    frag = vec4(col, 1.0);
+}
+"""

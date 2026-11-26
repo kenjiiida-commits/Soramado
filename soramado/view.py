@@ -209,6 +209,16 @@ class SpaceView(QOpenGLWidget):
         self.show_galaxies = True
         self.gcat = GalaxyCatalog()
 
+        # 地上モード（プラネタリウム）
+        self.ground = False
+        self.place = "大阪"
+        self.lat, self.lon = 34.69, 135.50
+        self.g_az = math.radians(180.0)     # 見ている方位（北=0、東=90度）
+        self.g_alt = math.radians(30.0)     # 見ている高度
+        self.g_fov = 90.0
+        self._fov = FOV_DEG
+        self._saved_space = None
+
         # カメラ（注視点のまわりを回る）
         self.target = "sun"
         self.yaw = math.radians(-60.0)
@@ -243,6 +253,9 @@ class SpaceView(QOpenGLWidget):
     def set_target(self, key: str, fly: bool = True):
         if key not in BY_KEY and not self.is_galaxy(key):
             return
+        if self.ground:
+            self.look_at(key)
+            return
         new_dist = self._default_dist(key)
         self.selected_star = -1
         if fly:
@@ -252,6 +265,45 @@ class SpaceView(QOpenGLWidget):
         self.target = key
         self.targetChanged.emit(key)
         self.update()
+
+    # ---------------------------------------------------------- 地上モード
+
+    def set_ground(self, on: bool):
+        if on == self.ground:
+            return
+        if on:
+            self._saved_space = (self.target, self.dist, self.yaw, self.pitch, self.magnify)
+            self._fly = None
+            self.magnify = 1.0
+            self.ground = True
+        else:
+            self.ground = False
+            if self._saved_space:
+                self.target, self.dist, self.yaw, self.pitch, self.magnify = self._saved_space
+        self.selected_star = -1
+        self.update()
+
+    def set_place(self, name, lat, lon):
+        self.place, self.lat, self.lon = name, lat, lon
+        self.update()
+
+    def ground_altaz(self, key):
+        """地上モードで、天体の高度・方位 [度]。"""
+        off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+        eye = self.positions["earth"] + off
+        return astro.alt_az(self.display_pos(key) - eye, zen, north, east)
+
+    def look_at(self, key):
+        """地上モードで、その天体の方を向く。地平線の下なら False。"""
+        if key not in BY_KEY or key == "earth":
+            return False
+        alt, az = self.ground_altaz(key)
+        self.g_az = math.radians(az)
+        self.g_alt = math.radians(max(alt, 5.0))
+        self.target = key
+        self.targetChanged.emit(key)
+        self.update()
+        return alt > 0
 
     def overview(self):
         self.selected_star = -1
@@ -410,6 +462,7 @@ class SpaceView(QOpenGLWidget):
         self.p_line = prog(shaders.LINE_VS, shaders.LINE_FS)
         self.p_glow = prog(shaders.GLOW_VS, shaders.GLOW_FS)
         self.p_star = prog(shaders.STAR_VS, shaders.STAR_FS)
+        self.p_sky = prog(shaders.SKY_VS, shaders.SKY_FS)
         self.m_stars = _Mesh(self.stars.vertex_data(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
@@ -527,6 +580,30 @@ class SpaceView(QOpenGLWidget):
             self.m_galaxies.draw(f, g.n, g.first)
         p.release()
 
+    def _ground_dir(self, az, alt):
+        zen, north, east = self._gframe if hasattr(self, "_gframe") else \
+            astro.observer_frame(self.jd, self.lat, self.lon)[1:]
+        return (math.cos(alt) * (math.cos(az) * north + math.sin(az) * east) + math.sin(alt) * zen)
+
+    def _draw_sky(self, f, mode, w, h):
+        right, up, fwd = self._basis
+        p = self.p_sky
+        p.bind()
+        p.setUniformValue("u_fwd", QVector3D(*fwd))
+        p.setUniformValue("u_right", QVector3D(*right))
+        p.setUniformValue("u_up", QVector3D(*up))
+        t = math.tan(math.radians(self._fov) / 2)
+        p.setUniformValue1f("u_tx", float(t * w / h))
+        p.setUniformValue1f("u_ty", float(t))
+        zen = self._gframe[0]
+        sun = self.positions["sun"] - self._eye
+        p.setUniformValue("u_zen", QVector3D(*zen))
+        p.setUniformValue("u_sun", QVector3D(*(sun / np.linalg.norm(sun))))
+        p.setUniformValue1f("u_sunalt", float(self._sun_alt))
+        p.setUniformValue1i("u_mode", mode)
+        self.m_glow.draw(f)
+        p.release()
+
     def _common(self, p, viewproj):
         p.setUniformValue("u_viewproj", _qmat(viewproj))
         p.setUniformValue1f("u_logc", float(LOGC))
@@ -545,15 +622,25 @@ class SpaceView(QOpenGLWidget):
         f.glDepthFunc(GL_LEQUAL)
         f.glEnable(GL_MULTISAMPLE)
 
-        focus = self._focus()
-        if not self._fly:
-            self.dist = max(self.dist, self._min_dist(self.target))
-        eye = focus + self._cam_dir() * self.dist
+        if self.ground:
+            # 地上モード：観測地に立って、方位・高度の方向を見る
+            self._fov = self.g_fov
+            off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+            self._gframe = (zen, north, east)
+            eye = self.positions["earth"] + off
+            fwd = self._ground_dir(self.g_az, self.g_alt)
+            up0 = zen
+        else:
+            self._fov = FOV_DEG
+            focus = self._focus()
+            if not self._fly:
+                self.dist = max(self.dist, self._min_dist(self.target))
+            eye = focus + self._cam_dir() * self.dist
 
-        # ビュー行列（回転のみ。位置はカメラ原点の座標で渡す）
-        fwd = focus - eye
-        fwd /= np.linalg.norm(fwd)
-        up0 = np.array([0.0, 0.0, 1.0])
+            # ビュー行列（回転のみ。位置はカメラ原点の座標で渡す）
+            fwd = focus - eye
+            fwd /= np.linalg.norm(fwd)
+            up0 = np.array([0.0, 0.0, 1.0])
         right = np.cross(fwd, up0)
         if np.linalg.norm(right) < 1e-9:
             right = np.array([1.0, 0.0, 0.0])
@@ -561,25 +648,39 @@ class SpaceView(QOpenGLWidget):
         up = np.cross(right, fwd)
         view = np.eye(4)
         view[0, :3], view[1, :3], view[2, :3] = right, up, -fwd
-        proj = _perspective(FOV_DEG, w / h, NEAR_AU, FAR_AU)
+        proj = _perspective(self._fov, w / h, NEAR_AU, FAR_AU)
         viewproj = proj @ view
         self._viewproj = viewproj
         self._eye = eye
+        self._basis = (right, up, fwd)
 
         rel = {b.key: self.display_pos(b.key) - eye for b in BODIES}
         sun_rel = rel["sun"]
         sun_far = float(np.linalg.norm(sun_rel))       # 太陽からカメラまで [AU]
         self._sun_far = sun_far
-        focal = h / (2 * math.tan(math.radians(FOV_DEG) / 2))
+        focal = h / (2 * math.tan(math.radians(self._fov) / 2))
         # 星座は太陽の近くから見たときだけ意味があるので、離れるほど薄くする
         self._con_fade = 1.0 - _smooth(2000.0, 0.8 * LY_AU, sun_far)
 
-        # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
+        # ---- 地上モードの空の色
+        night = 1.0
+        limit = self.limit_mag
         f.glDisable(GL_DEPTH_TEST)
+        if self.ground:
+            zen = self._gframe[0]
+            sun_dir = sun_rel / np.linalg.norm(sun_rel)
+            self._sun_alt = math.degrees(math.asin(max(-1.0, min(1.0, float(np.dot(sun_dir, zen))))))
+            self._draw_sky(f, 0, w, h)
+            # 空が明るいほど星は見えない
+            night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt)
+            limit = self.limit_mag - (1.0 - night) * 7.0
+        self._night = night
+
+        # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
         f.glEnable(GL_BLEND)
         f.glBlendFunc(GL_ONE, GL_ONE)
         f.glEnable(GL_PROGRAM_POINT_SIZE)
-        if self.show_galaxies:
+        if self.show_galaxies and not self.ground:
             self._draw_galaxies(f, viewproj, eye, focal, h)
             p = self.p_gcat
             p.bind()
@@ -597,7 +698,7 @@ class SpaceView(QOpenGLWidget):
             self._common(p, viewproj)
             p.setUniformValue("u_offset", QVector3D(0, 0, 0))
             p.setUniformValue1f("u_scale", 1000.0)
-            k = self._con_fade
+            k = self._con_fade * (night if self.ground else 1.0)
             p.setUniformValue("u_color", QVector4D(0.10 * k, 0.18 * k, 0.34 * k, 1.0))
             self.m_conlines.draw(f)
             p.release()
@@ -607,9 +708,9 @@ class SpaceView(QOpenGLWidget):
             p.bind()
             p.setUniformValue("u_viewproj", _qmat(viewproj))
             p.setUniformValue("u_eye", QVector3D(*eye))
-            p.setUniformValue1f("u_limit", float(self.limit_mag))
+            p.setUniformValue1f("u_limit", float(limit))
             p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
-            p.setUniformValue1f("u_gain", 1.0)
+            p.setUniformValue1f("u_gain", float(0.3 + 0.7 * night))
             p.setUniformValue1i("u_hide_unknown", int(sun_far > 3000.0))
             self.m_stars.draw(f)
             p.release()
@@ -628,11 +729,13 @@ class SpaceView(QOpenGLWidget):
         sat_r = self.display_radius("saturn")
         sat_rot = body_orientation(sat, self.jd)
         for b in BODIES:
+            if self.ground and b.key == "earth":
+                continue          # 地上モードでは自分の立っている地球は描かない
             r = self.display_radius(b.key)
             pos = rel[b.key]
             d = np.linalg.norm(pos)
             # 画面上で 1 ピクセルより小さいものは球を描かない（点とラベルで表す）
-            if r / d * h / (2 * math.tan(math.radians(FOV_DEG) / 2)) < 0.5:
+            if r / d * h / (2 * math.tan(math.radians(self._fov) / 2)) < 0.5:
                 continue
             rot = body_orientation(b, self.jd)
             model = np.eye(4)
@@ -683,7 +786,7 @@ class SpaceView(QOpenGLWidget):
             p.release()
 
         # ---- 軌道
-        if self.show_orbits and sun_far < 2e5:
+        if self.show_orbits and sun_far < 2e5 and not self.ground:
             p = self.p_line
             p.bind()
             self._common(p, viewproj)
@@ -717,7 +820,7 @@ class SpaceView(QOpenGLWidget):
         if clip[3] > 0:
             ndc = clip[:2] / clip[3]
             pix_per_ndc = h / 2
-            core_px = self.display_radius("sun") / clip[3] * (1 / math.tan(math.radians(FOV_DEG) / 2)) * pix_per_ndc
+            core_px = self.display_radius("sun") / clip[3] * (1 / math.tan(math.radians(self._fov) / 2)) * pix_per_ndc
             # 太陽の明るさ（離れると暗い星になる）: 絶対等級 4.83
             m_sun = 4.83 + 5 * math.log10(max(clip[3], 1e-9) / 206264.806 / 10.0)
             li = -0.4 * (m_sun - self.limit_mag)
@@ -740,6 +843,8 @@ class SpaceView(QOpenGLWidget):
         f.glDisable(GL_BLEND)
         f.glDisable(GL_DEPTH_TEST)
 
+        if self.ground:
+            self._draw_sky(f, 1, w, h)
         self._draw_overlay(rel, viewproj, w, h)
 
     # ---------------------------------------------------------- ラベル・点
@@ -758,7 +863,7 @@ class SpaceView(QOpenGLWidget):
         font = QFont()
         font.setPointSizeF(10.5)
         painter.setFont(font)
-        focal = h / (2 * math.tan(math.radians(FOV_DEG) / 2))
+        focal = h / (2 * math.tan(math.radians(self._fov) / 2))
 
         self._screen = {}
         # 優先順：注目している天体 → 太陽 → 大きい順
@@ -769,6 +874,8 @@ class SpaceView(QOpenGLWidget):
         for b in order:
             if far and b.key != "sun":
                 continue          # 太陽系から遠く離れると惑星は太陽に重なるので出さない
+            if self.ground and (b.key == "earth" or not self._above(rel[b.key], margin=0.01)):
+                continue          # 地平線の下の天体は見えない
             pr = self._project(rel[b.key], viewproj, w, h)
             if pr is None:
                 continue
@@ -799,10 +906,44 @@ class SpaceView(QOpenGLWidget):
             painter.setPen(QPen(col.lighter(130) if b.key == self.target else col))
             painter.drawText(QPointF(x + off, y - off * 0.3), b.name if not far else "太陽（太陽系）")
 
-        self._draw_galaxy_labels(painter, viewproj, w, h, placed, fm, focal)
+        if self.ground:
+            self._draw_compass(painter, viewproj, w, h, placed, fm)
+        else:
+            self._draw_galaxy_labels(painter, viewproj, w, h, placed, fm, focal)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
         painter.end()
+
+    def _above(self, direction, margin=0.0) -> bool:
+        """地上モードで、その方向が地平線より上か。"""
+        if not self.ground:
+            return True
+        d = np.asarray(direction, dtype=np.float64)
+        return float(np.dot(d, self._gframe[0])) / max(float(np.linalg.norm(d)), 1e-30) > -margin
+
+    def _draw_compass(self, painter, viewproj, w, h, placed, fm):
+        """地平線上の方角（北・東・南・西など）。"""
+        zen, north, east = self._gframe
+        font = painter.font()
+        big = QFont(font)
+        big.setPointSizeF(font.pointSizeF() * 1.4)
+        big.setBold(True)
+        names = [("北", 0), ("北東", 45), ("東", 90), ("南東", 135), ("南", 180), ("南西", 225),
+                 ("西", 270), ("北西", 315)]
+        for name, az in names:
+            a = math.radians(az)
+            d = math.cos(a) * north + math.sin(a) * east
+            pr = self._sky_xy(d, viewproj, w, h)
+            if not pr or not (0 < pr[0] < w and 0 < pr[1] < h + 40):
+                continue
+            main = len(name) == 1
+            painter.setFont(big if main else font)
+            painter.setPen(QPen(QColor(255, 120, 90) if name == "北" else QColor(230, 200, 140)))
+            rect = painter.fontMetrics().boundingRect(name)
+            rect.moveCenter(QPointF(pr[0], min(pr[1] + 18, h - 12)).toPoint())
+            painter.drawText(rect, Qt.AlignCenter, name)
+            placed.append(rect)
+        painter.setFont(font)
 
     def _draw_galaxy_labels(self, painter, viewproj, w, h, placed, fm, focal):
         if not self.show_galaxies:
@@ -845,7 +986,7 @@ class SpaceView(QOpenGLWidget):
         wc = np.where(ok, wc, 1.0)
         x = (clip[:, 0] / wc * 0.5 + 0.5) * w
         y = (1 - (clip[:, 1] / wc * 0.5 + 0.5)) * h
-        focal = h / (2 * math.tan(math.radians(FOV_DEG) / 2))
+        focal = h / (2 * math.tan(math.radians(self._fov) / 2))
         return x, y, self.gcat.radius / d * focal, ok & (x > 0) & (x < w) & (y > 0) & (y < h)
 
     def _draw_catalog_labels(self, painter, viewproj, w, h, placed, fm, focal):
@@ -876,7 +1017,17 @@ class SpaceView(QOpenGLWidget):
 
     def _draw_scale(self, painter, w, h):
         """画面の横幅がどれくらいの長さかを左下に出す。"""
-        width_au = 2 * self.dist * math.tan(math.radians(FOV_DEG) / 2) * w / h
+        if self.ground:
+            alt = math.degrees(self.g_alt)
+            az = math.degrees(self.g_az) % 360
+            dirs = ["北", "北北東", "北東", "東北東", "東", "東南東", "南東", "南南東",
+                    "南", "南南西", "南西", "西南西", "西", "西北西", "北西", "北北西"]
+            txt = (f"{self.place}　見ている方向: {dirs[int((az + 11.25) // 22.5) % 16]}"
+                   f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.0f}°")
+            painter.setPen(QPen(QColor(200, 205, 215)))
+            painter.drawText(QPointF(12, h - 12), txt)
+            return
+        width_au = 2 * self.dist * math.tan(math.radians(self._fov) / 2) * w / h
         painter.setPen(QPen(QColor(170, 180, 200)))
         painter.drawText(QPointF(12, h - 12), "画面の横幅 約 " + format_length(width_au))
 
@@ -896,17 +1047,20 @@ class SpaceView(QOpenGLWidget):
             return cat.mag[i] + 5 * math.log10(max(np.linalg.norm(v), 1.0) / max(cat.dist_pc[i] * 206264.806, 1.0))
 
         # 選んだ星の印
-        if self.selected_star >= 0 and self.show_stars:
+        if self.selected_star >= 0 and self.show_stars and self._above(star_dir(self.selected_star)):
             pr = self._sky_xy(star_dir(self.selected_star), viewproj, w, h)
             if pr:
                 painter.setPen(QPen(QColor(120, 220, 255), 1.4))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawEllipse(QPointF(pr[0], pr[1]), 9, 9)
         # 星座名
-        if self.show_con_names and self._con_fade > 0.05:
+        con_k = self._con_fade * (self._night if self.ground else 1.0)
+        if self.show_con_names and con_k > 0.05:
             font = painter.font()
-            painter.setPen(QPen(QColor(80, 115, 180, int(190 * self._con_fade))))
+            painter.setPen(QPen(QColor(80, 115, 180, int(190 * con_k))))
             for c in cat.constellations:
+                if not self._above(c.center):
+                    continue
                 pr = self._sky_xy(c.center, viewproj, w, h)
                 if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
                     continue
@@ -928,11 +1082,14 @@ class SpaceView(QOpenGLWidget):
                     if far:
                         continue
                     break
+                if self.ground and (not self._above(star_dir(i))
+                                    or cat.mag[i] > self.limit_mag - (1.0 - self._night) * 7.0):
+                    continue
                 pr = self._sky_xy(star_dir(i), viewproj, w, h)
                 if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
                     continue
                 name = cat.short_name(i)
-                rect = fm.boundingRect(name).translated(int(pr[0] + 6), int(pr[1] - 4))
+                rect = fm.boundingRect(name).translated(int(pr[0] + 6), int(pr[1] - 4)).adjusted(-4, -2, 4, 2)
                 if any(rect.intersects(r) for r in placed):
                     continue
                 placed.append(rect)
@@ -969,13 +1126,24 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- マウス・キー
 
     def mousePressEvent(self, e):
-        self._drag = (e.position(), e.button(), self.yaw, self.pitch, self.dist)
+        self._drag = (e.position(), e.button(), self.yaw, self.pitch, self.dist, self.g_az, self.g_alt,
+                      self.g_fov)
 
     def mouseMoveEvent(self, e):
         if not self._drag:
             return
-        p0, button, yaw0, pitch0, dist0 = self._drag
+        p0, button, yaw0, pitch0, dist0, az0, alt0, fov0 = self._drag
         d = e.position() - p0
+        if self.ground:
+            if button == Qt.LeftButton:
+                # 画面をつかんで動かす感覚（視野が狭いほどゆっくり）
+                k = math.radians(self.g_fov) / max(self.height(), 1)
+                self.g_az = az0 - d.x() * k
+                self.g_alt = max(math.radians(-20), min(math.radians(90), alt0 + d.y() * k))
+            else:
+                self.g_fov = max(1.0, min(120.0, fov0 * math.exp(d.y() * 0.01)))
+            self.update()
+            return
         if button == Qt.LeftButton:
             self.yaw = yaw0 - d.x() * 0.006
             self.pitch = max(-1.55, min(1.55, pitch0 + d.y() * 0.006))
@@ -989,6 +1157,10 @@ class SpaceView(QOpenGLWidget):
 
     def wheelEvent(self, e):
         steps = e.angleDelta().y() / 120.0
+        if self.ground:
+            self.g_fov = max(1.0, min(120.0, self.g_fov * (0.88 ** steps)))
+            self.update()
+            return
         if self._fly:
             self._fly = None
         self.dist = min(MAX_DIST_AU, max(self._min_dist(self.target), self.dist * (0.85 ** steps)))
@@ -1005,6 +1177,11 @@ class SpaceView(QOpenGLWidget):
             self.set_target(best)
             return
         star = self.pick_star(x, y)
+        if self.ground:
+            self.selected_star = star
+            self.starSelected.emit(star)
+            self.update()
+            return
         if star < 0:
             gi = self.pick_catalog_galaxy(x, y)
             if gi >= 0:
@@ -1019,6 +1196,8 @@ class SpaceView(QOpenGLWidget):
         if k == Qt.Key_Space:
             self.paused = not self.paused
             self.statusChanged.emit("")
+        elif self.ground and k in (Qt.Key_Plus, Qt.Key_Equal, Qt.Key_Minus):
+            self.g_fov = max(1.0, min(120.0, self.g_fov * (0.8 if k != Qt.Key_Minus else 1.25)))
         elif k in (Qt.Key_Plus, Qt.Key_Equal):
             self.dist = max(self._min_dist(self.target), self.dist * 0.8)
         elif k == Qt.Key_Minus:
