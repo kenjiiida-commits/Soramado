@@ -285,6 +285,7 @@ uniform float u_fade;
 uniform float u_boost;               // 小さく見える銀河を見やすくするための増光
 uniform float u_floor;               // 銀河全体が数ピクセルしかないときの最低限の明るさ
 uniform float u_px;
+uniform float u_near;                 // これより近い粒は薄くする [kpc]（天の川銀河の中にいるとき）
 out vec3 v_col;
 void main() {
     vec3 w = u_center + u_rot * a_pos;
@@ -295,7 +296,10 @@ void main() {
     float px = clamp(tp, 1.0, 40.0);
     float r = min(tp, 40.0) / px;
     gl_PointSize = px * u_px;
-    v_col = a_rgb * max(min(a_w * u_k * r * r * u_fade * u_boost, 1.2), a_w * u_floor * u_fade);
+    float s = a_w * u_k * r * r * u_fade * u_boost;
+    s = a_w > 0.0 ? max(min(s, 3.0), a_w * u_floor * u_fade) : max(s, -1.5);   // 負の重みは光をさえぎるちり
+    if (u_near > 0.0) s *= smoothstep(0.35 * u_near, u_near, d / u_kpc);
+    v_col = a_rgb * s;
 }
 """
 
@@ -602,5 +606,34 @@ void main() {
     if (r2 > 1.0) discard;
     float g = v_haze > 0.5 ? exp(-4.0 * r2) * (1.0 - r2) : exp(-3.0 * r2);
     frag = vec4(v_col * g, 1.0);
+}
+"""
+
+
+# ---------------------------------------------------------------- 明るさの圧縮（星雲・銀河）
+# 星雲や銀河の粒は、浮動小数点の画面に光をそのまま足し合わせてから、明るいところほどゆるやかに
+# 明るくなるように圧縮して元の画面に重ねる。こうすると、粒が重なる中心部が真っ白につぶれない。
+TONE_VS = """#version 330 core
+layout(location=0) in vec2 a_pos;
+out vec2 v_uv;
+void main() {
+    v_uv = a_pos * 0.5 + 0.5;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+"""
+
+TONE_FS = """#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_exp;
+out vec4 frag;
+void main() {
+    vec3 c = max(texture(u_tex, v_uv).rgb, 0.0) * u_exp;    // ちりの粒で負になったところは 0 に
+    float L = max(max(c.r, c.g), c.b);
+    if (L < 1e-5) discard;
+    float m = 1.0 - exp(-L);
+    vec3 o = c * (m / L);                                  // 色合いを保ったまま明るさだけ圧縮
+    o = mix(o, vec3(m), 0.45 * smoothstep(1.5, 8.0, L));   // とても明るいところは白っぽく
+    frag = vec4(o, 1.0);
 }
 """

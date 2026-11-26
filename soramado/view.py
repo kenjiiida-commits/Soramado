@@ -6,11 +6,11 @@ import math
 import time
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF,
                            QVector2D, QVector3D, QVector4D)
-from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture,
-                              QOpenGLVertexArrayObject)
+from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject, QOpenGLFramebufferObjectFormat,
+                              QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture, QOpenGLVertexArrayObject)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from . import astro, shaders, textures
@@ -47,6 +47,11 @@ GL_MULTISAMPLE = 0x809D
 GL_POINTS = 0x0000
 GL_LINES = 0x0001
 GL_PROGRAM_POINT_SIZE = 0x8642
+GL_RGBA16F = 0x881A
+GL_FRAMEBUFFER = 0x8D40
+GL_TEXTURE0 = 0x84C0
+GL_TEXTURE_2D = 0x0DE1
+GLOW_EXPOSURE = 1.3          # 星雲・銀河の明るさ（圧縮する前にかける倍率）
 
 FOV_DEG = 45.0
 NEAR_AU = 1e-10
@@ -465,6 +470,10 @@ class SpaceView(QOpenGLWidget):
 
     def _galaxy_view_dir(self, key):
         """銀河へ行くときの見下ろす向き（カメラが注視点のどちら側にいるか）。"""
+        if self.is_neb(key):
+            # 星雲・星団は、写真と同じ形に見えるように地球の側から見る
+            c = neb.NEBULAE[int(key[2:])].pos
+            return -c / np.linalg.norm(c)
         if not self.is_galaxy(key) or key == "u:cmb":
             return None
         if key.startswith("c:"):
@@ -734,6 +743,9 @@ class SpaceView(QOpenGLWidget):
         self.m_stars = _Mesh(self.stars.vertex_data(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
+        self.p_tone = prog(shaders.TONE_VS, shaders.TONE_FS)
+        self.m_full = _Mesh(np.array([[-1, -1], [3, -1], [-1, 3]], np.float32), [(0, 2)], GL_TRIANGLES)
+        self._glow_fbo = None
         self.m_galaxies = _Mesh(gx.build(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
         self.m_craft = {sc.key: _Mesh(crafts.path(sc, until=crafts.ANCHOR_JD + 365.25 * 5),
                                       [(0, 3)], GL_LINE_STRIP) for sc in crafts.SPACECRAFT}
@@ -845,7 +857,6 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1f("u_star_gain", float(star))
             p.setUniformValue("u_center", QVector3D(*c))
             m.draw(f)
-        f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         p.release()
 
     def _draw_neb_labels(self, painter, viewproj, w, h, placed, fm, focal):
@@ -1212,6 +1223,42 @@ class SpaceView(QOpenGLWidget):
                 self.m_qso.draw(f)
                 p.release()
 
+    def _glow_begin(self, f, w, h) -> bool:
+        """星雲・銀河を描く浮動小数点の画面を用意する。使えないパソコンでは False（そのまま描く）。"""
+        if self._glow_fbo is False:
+            return False
+        dpr = self.devicePixelRatioF()
+        size = QSize(int(w * dpr), int(h * dpr))
+        if self._glow_fbo is None or self._glow_fbo.size() != size:
+            fmt = QOpenGLFramebufferObjectFormat()
+            fmt.setAttachment(QOpenGLFramebufferObject.NoAttachment)
+            fmt.setInternalTextureFormat(GL_RGBA16F)
+            fbo = QOpenGLFramebufferObject(size, fmt)
+            if not fbo.isValid():
+                self._glow_fbo = False
+                f.glBindFramebuffer(GL_FRAMEBUFFER, self.defaultFramebufferObject())
+                return False
+            self._glow_fbo = fbo
+        self._glow_fbo.bind()
+        f.glDisable(GL_DEPTH_TEST)
+        f.glClearColor(0.0, 0.0, 0.0, 0.0)
+        f.glClear(GL_COLOR_BUFFER_BIT)
+        f.glClearColor(0.0, 0.0, 0.0, 1.0)
+        return True
+
+    def _glow_end(self, f):
+        f.glBindFramebuffer(GL_FRAMEBUFFER, self.defaultFramebufferObject())
+        f.glDisable(GL_DEPTH_TEST)
+        p = self.p_tone
+        p.bind()
+        f.glActiveTexture(GL_TEXTURE0)
+        f.glBindTexture(GL_TEXTURE_2D, self._glow_fbo.texture())
+        p.setUniformValue1i("u_tex", 0)
+        p.setUniformValue1f("u_exp", float(GLOW_EXPOSURE))
+        self.m_full.draw(f)
+        p.release()
+        f.glEnable(GL_DEPTH_TEST)
+
     def _draw_galaxies(self, f, viewproj, eye, focal, h):
         p = self.p_galaxy
         p.bind()
@@ -1226,6 +1273,8 @@ class SpaceView(QOpenGLWidget):
             if g.kind == "milkyway":
                 # 太陽系のすぐ近くでは天の川銀河の模式図は出さない（本物の星を見せる）
                 fade = _smooth(3 * LY_AU, 300 * LY_AU, self._sun_far)
+                # 銀河の中（太陽の近く）から見る帯は、模式図の粒が目立つので控えめに
+                fade *= 0.35 + 0.65 * _smooth(3000 * LY_AU, 30000 * LY_AU, self._sun_far)
             elif self._sun_far < 0.5 * LY_AU:
                 continue          # 太陽系の中からは、よその銀河の模式図は小さすぎて見えないので描かない
             if fade <= 0.01:
@@ -1241,6 +1290,8 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1f("u_floor", float(4.0 / g.n * (1.0 - _smooth(2.0, 10.0, r_px))))
             p.setUniformValue1f("u_k", float(g.k))
             p.setUniformValue1f("u_fade", float(fade))
+            # 天の川銀河の中にいるときは、すぐ近くの粒（大きくぼやける）を出さず、遠くの帯だけを見せる
+            p.setUniformValue1f("u_near", 2.5 if g.kind == "milkyway" else 0.0)
             self.m_galaxies.draw(f, g.n, g.first)
         p.release()
 
@@ -1355,8 +1406,14 @@ class SpaceView(QOpenGLWidget):
         f.glEnable(GL_PROGRAM_POINT_SIZE)
         if not self.ground:
             self._draw_far_universe(f, viewproj, eye, sun_rel, sun_far)
+        glow = self._glow_begin(f, w, h)
         if self.show_galaxies and not self.ground:
             self._draw_galaxies(f, viewproj, eye, focal, h)
+        self._draw_nebulae(f, viewproj, h)
+        f.glBlendFunc(GL_ONE, GL_ONE)
+        if glow:
+            self._glow_end(f)
+        if self.show_galaxies and not self.ground:
             p = self.p_gcat
             p.bind()
             p.setUniformValue("u_viewproj", _qmat(viewproj))
@@ -1547,9 +1604,6 @@ class SpaceView(QOpenGLWidget):
 
         # ---- たくさんの小惑星・彗星
         self._draw_minor(f, viewproj, sun_rel, sun_far)
-
-        # ---- 星雲・星団
-        self._draw_nebulae(f, viewproj, h)
 
         # ---- 探査機の航路
         if self.show_craft and not self.ground and sun_far < 2e5:

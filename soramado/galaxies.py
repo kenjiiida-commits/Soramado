@@ -70,33 +70,33 @@ class Galaxy:
 
 GALAXIES = [
     Galaxy("g:mw", "天の川銀河", "milkyway", "棒渦巻銀河（わたしたちの銀河）", _GC_RA, _GC_DEC,
-           SUN_GC_KPC, 15.0, count=170000),
+           SUN_GC_KPC, 15.0, count=240000),
     Galaxy("g:lmc", "大マゼラン雲", "irregular", "不規則銀河（天の川銀河の伴銀河）", 80.894, -69.756,
-           50.0, 5.0, incl=35, pa=170, count=14000),
+           50.0, 5.0, incl=35, pa=170, count=40000),
     Galaxy("g:smc", "小マゼラン雲", "irregular", "不規則銀河（天の川銀河の伴銀河）", 13.187, -72.829,
-           62.0, 2.8, incl=60, pa=45, count=7000),
+           62.0, 2.8, incl=60, pa=45, count=60000),
     Galaxy("g:m31", "アンドロメダ銀河（M31）", "spiral", "渦巻銀河", 10.6847, 41.2690,
-           765.0, 23.0, incl=77, pa=38, count=60000),
+           765.0, 23.0, incl=77, pa=38, count=400000),
     Galaxy("g:m32", "M32", "elliptical", "楕円銀河（アンドロメダ銀河の伴銀河）", 10.6743, 40.8652,
-           763.0, 1.0, count=3000, flat=0.75, in_menu=False),
+           763.0, 1.0, count=8000, flat=0.75, in_menu=False),
     Galaxy("g:m110", "M110", "elliptical", "楕円銀河（アンドロメダ銀河の伴銀河）", 10.0921, 41.6853,
-           820.0, 2.5, pa=170, count=4000, flat=0.5, in_menu=False),
+           820.0, 2.5, pa=170, count=10000, flat=0.5, in_menu=False),
     Galaxy("g:m33", "さんかく座銀河（M33）", "spiral", "渦巻銀河", 23.4621, 30.6599,
-           840.0, 9.0, incl=55, pa=23, count=25000),
+           840.0, 9.0, incl=55, pa=23, count=60000),
     Galaxy("g:m81", "M81（ボーデの銀河）", "spiral", "渦巻銀河", 148.8882, 69.0653,
-           3600.0, 14.0, incl=59, pa=157, count=25000),
+           3600.0, 14.0, incl=59, pa=157, count=60000),
     Galaxy("g:m82", "M82（葉巻銀河）", "irregular", "スターバースト銀河", 148.9685, 69.6797,
-           3500.0, 6.0, incl=80, pa=65, count=8000),
+           3500.0, 6.0, incl=80, pa=65, count=20000),
     Galaxy("g:cena", "ケンタウルス座A", "elliptical", "楕円銀河（電波銀河）", 201.3651, -43.0191,
-           3800.0, 9.0, pa=35, count=12000, flat=0.8),
+           3800.0, 9.0, pa=35, count=30000, flat=0.8),
     Galaxy("g:m101", "回転花火銀河（M101）", "spiral", "渦巻銀河", 210.8023, 54.3489,
-           6400.0, 26.0, incl=18, pa=40, count=25000),
+           6400.0, 26.0, incl=18, pa=40, count=60000),
     Galaxy("g:m51", "子持ち銀河（M51）", "spiral", "渦巻銀河", 202.4696, 47.1952,
-           8600.0, 12.0, incl=22, pa=163, count=20000),
+           8600.0, 12.0, incl=22, pa=163, count=60000),
     Galaxy("g:m104", "ソンブレロ銀河（M104）", "lenticular", "渦巻銀河（ほぼ真横向き）", 189.9976, -11.6231,
-           9600.0, 8.0, incl=84, pa=90, count=15000),
+           9600.0, 8.0, incl=84, pa=90, count=40000),
     Galaxy("g:m87", "M87（おとめ座A）", "elliptical", "巨大楕円銀河（中心に巨大ブラックホール）", 187.7059, 12.3911,
-           16400.0, 20.0, count=20000, flat=0.85),
+           16400.0, 20.0, count=50000, flat=0.85),
 ]
 
 BY_KEY = {g.key: g for g in GALAXIES}
@@ -148,6 +148,17 @@ def _spiral_arms(rng, n, r_min, r_max, n_arms, pitch_deg, phase, width, thick, c
     return np.stack([x, y, z], axis=1)
 
 
+def _knots(rng, centers, per, spread):
+    """腕の上の星の生まれる場所（HII 領域）や若い星の集団: 中心のまわりに小さく集まった粒。"""
+    idx = np.repeat(np.arange(len(centers)), per)
+    return centers[idx] + rng.normal(0, 1, (len(idx), 3)) * spread
+
+
+def _dust_lanes(rng, n, r_min, r_max, n_arms, pitch_deg, phase, width, thick, shift, clockwise=False):
+    """腕の内側（回転の向きと逆側）にそって走る暗いちりの筋。"""
+    return _spiral_arms(rng, n, r_min, r_max, n_arms, pitch_deg, phase - shift, width, thick, clockwise)
+
+
 def _exp_disk(rng, n, scale, thick, r_max):
     r = rng.gamma(2.0, scale, n)
     over = r > r_max
@@ -168,57 +179,93 @@ def _colors(n, rgb, jitter, rng):
 
 def _milky_way(rng, n):
     """天の川銀河。X=銀河中心→太陽の逆向き（太陽は -X 側）、時計回りに回転（北から見て）。"""
-    n_bulge, n_arm, n_disk = int(n * 0.16), int(n * 0.54), n - int(n * 0.16) - int(n * 0.54)
+    n_bulge, n_arm, n_disk = int(n * 0.16), int(n * 0.46), int(n * 0.26)
+    n_knot, n_dust = int(n * 0.04), n - int(n * 0.16) - int(n * 0.46) - int(n * 0.26) - int(n * 0.04)
     parts, cols, sizes, weights = [], [], [], []
-    # 棒（バー）とバルジ: 太陽から見て銀経の正の側に近い端がある
-    bar = _ellipsoid(rng, n_bulge, 1.7, 0.6, 0.45)
+    # 棒（バー）とバルジ: 太陽から見て銀経の正の側に近い端がある。中心ほど密に
+    bar = _ellipsoid(rng, n_bulge, 1.7, 0.6, 0.45) * rng.gamma(2.0, 0.5, (n_bulge, 1))
     phi = math.radians(180 - 27)
     c, s = math.cos(phi), math.sin(phi)
-    bar = bar @ np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])
+    rot = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])
+    bar = bar @ rot
     parts.append(bar)
-    cols.append(_colors(n_bulge, (1.0, 0.82, 0.55), 0.08, rng))
-    sizes.append(np.full(n_bulge, 0.25))
+    cols.append(_colors(n_bulge, (1.0, 0.8, 0.52), 0.08, rng))
+    sizes.append(np.full(n_bulge, 0.14))
     weights.append(np.full(n_bulge, 1.3))
     # 4本の腕（ピッチ角12度）。太陽の位置（θ=180度）で半径 6.6kpc（いて腕）と 9.2kpc（ペルセウス腕）
     k = math.tan(math.radians(12.0))
     r_ref = 6.6
     phase = math.pi - math.log(r_ref / 3.0) / k
-    arms = _spiral_arms(rng, n_arm, 3.0, 16.0, 4, 12.0, phase, 0.45, 0.10)
+    arms = _spiral_arms(rng, n_arm, 3.0, 16.0, 4, 12.0, phase, 0.32, 0.08)
     parts.append(arms)
-    ac = _colors(n_arm, (0.62, 0.74, 1.0), 0.1, rng)
-    pink = rng.random(n_arm) < 0.035
-    ac[pink] = (1.0, 0.45, 0.6)
-    cols.append(ac)
-    sizes.append(np.where(pink, 0.12, 0.2))
-    weights.append(np.where(pink, 2.5, 1.0))
+    cols.append(_colors(n_arm, (0.62, 0.74, 1.0), 0.1, rng))
+    sizes.append(np.full(n_arm, 0.11))
+    weights.append(np.full(n_arm, 1.0))
+    # 腕の上の星の生まれる場所（ピンク）と若い星の集団（青白）
+    centers = _spiral_arms(rng, n_knot // 10, 3.5, 15.0, 4, 12.0, phase, 0.25, 0.04)
+    kn = _knots(rng, centers, 10, 0.06)[:n_knot]
+    pink = rng.random(len(kn)) < 0.6
+    parts.append(kn)
+    cols.append(np.where(pink[:, None], [1.0, 0.4, 0.55], [0.75, 0.85, 1.0]))
+    sizes.append(np.full(len(kn), 0.07))
+    weights.append(np.full(len(kn), 3.5))
     # 円盤全体の淡い光
-    disk = _exp_disk(rng, n_disk, 2.6, 0.25, 18.0)
+    disk = _exp_disk(rng, n_disk, 2.6, 0.2, 18.0)
     parts.append(disk)
     cols.append(_colors(n_disk, (1.0, 0.9, 0.75), 0.08, rng))
-    sizes.append(np.full(n_disk, 0.45))
+    sizes.append(np.full(n_disk, 0.25))
     weights.append(np.full(n_disk, 0.6))
+    # 腕の内側のちりの筋
+    dust = _dust_lanes(rng, n_dust, 3.0, 15.0, 4, 12.0, phase, 0.15, 0.05, 0.3)
+    parts.append(dust)
+    cols.append(np.ones((n_dust, 3)))
+    sizes.append(np.full(n_dust, 0.14))
+    weights.append(np.full(n_dust, -1.4))
     return np.concatenate(parts), np.concatenate(cols), np.concatenate(sizes), np.concatenate(weights)
 
 
 def _generic(g: Galaxy, rng):
     n, R = g.count, g.radius_kpc
     if g.kind in ("spiral", "barred"):
-        nb, na = int(n * 0.2), int(n * 0.5)
-        nd = n - nb - na
-        p = [_ellipsoid(rng, nb, R * 0.12, R * 0.12, R * 0.08),
-             _spiral_arms(rng, na, R * 0.15, R, 2, 15.0, rng.random() * 6.28, R * 0.035, R * 0.01),
-             _exp_disk(rng, nd, R * 0.22, R * 0.015, R * 1.1)]
-        c = [_colors(nb, (1.0, 0.85, 0.6), 0.08, rng), _colors(na, (0.65, 0.76, 1.0), 0.1, rng),
-             _colors(nd, (1.0, 0.92, 0.8), 0.08, rng)]
-        s = [np.full(nb, R * 0.03), np.full(na, R * 0.02), np.full(nd, R * 0.04)]
-        w = [np.full(nb, 1.4), np.full(na, 1.0), np.full(nd, 0.6)]
+        nb, na, nk, nd = int(n * 0.18), int(n * 0.42), int(n * 0.06), int(n * 0.22)
+        nu = n - nb - na - nk - nd
+        arms_n, pitch = (2, 15.0) if g.key != "g:m101" else (4, 22.0)
+        phase = rng.random() * 6.28
+        centers = _spiral_arms(rng, nk // 8, R * 0.2, R * 0.95, arms_n, pitch, phase, R * 0.025, R * 0.005)
+        kn = _knots(rng, centers, 8, R * 0.012)[:nk]
+        nk = len(kn)
+        pink = rng.random(nk) < 0.55
+        p = [_ellipsoid(rng, nb, R * 0.1, R * 0.1, R * 0.07) * rng.gamma(2.0, 0.5, (nb, 1)),
+             _spiral_arms(rng, na, R * 0.15, R, arms_n, pitch, phase, R * 0.03, R * 0.01),
+             kn,
+             _exp_disk(rng, nd, R * 0.22, R * 0.015, R * 1.1),
+             _dust_lanes(rng, nu, R * 0.12, R * 0.85, arms_n, pitch, phase, R * 0.012, R * 0.006, 0.35)]
+        c = [_colors(nb, (1.0, 0.82, 0.55), 0.08, rng), _colors(na, (0.65, 0.76, 1.0), 0.1, rng),
+             np.where(pink[:, None], [1.0, 0.4, 0.55], [0.75, 0.85, 1.0]),
+             _colors(nd, (1.0, 0.92, 0.8), 0.08, rng), np.ones((nu, 3))]
+        s = [np.full(nb, R * 0.016), np.full(na, R * 0.011), np.full(nk, R * 0.009),
+             np.full(nd, R * 0.025), np.full(nu, R * 0.012)]
+        w = [np.full(nb, 1.4), np.full(na, 1.0), np.full(nk, 3.5), np.full(nd, 0.6), np.full(nu, -0.8)]
     elif g.kind == "lenticular":
         nb = int(n * 0.45)
         nd = n - nb
-        p = [_ellipsoid(rng, nb, R * 0.28, R * 0.28, R * 0.2), _exp_disk(rng, nd, R * 0.3, R * 0.02, R)]
-        c = [_colors(nb, (1.0, 0.88, 0.65), 0.06, rng), _colors(nd, (0.95, 0.88, 0.75), 0.06, rng)]
-        s = [np.full(nb, R * 0.05), np.full(nd, R * 0.03)]
-        w = [np.full(nb, 1.2), np.full(nd, 0.8)]
+        nr = n // 6
+        t = rng.random(nr) * 2 * math.pi
+        rr = rng.normal(R * 0.5, R * 0.04, nr)
+        ring = np.stack([rr * np.cos(t), rr * np.sin(t), rng.normal(0, R * 0.012, nr)], axis=1)
+        p = [_ellipsoid(rng, nb, R * 0.28, R * 0.28, R * 0.2) * rng.gamma(2.0, 0.5, (nb, 1)),
+             _exp_disk(rng, nd, R * 0.3, R * 0.02, R), ring]
+        if g.key == "g:m104":       # ソンブレロ銀河: ちりの輪のすぐ外に明るい星の輪（つば）
+            t2 = rng.random(nr) * 2 * math.pi
+            r2 = rng.normal(R * 0.62, R * 0.05, nr)
+            p.append(np.stack([r2 * np.cos(t2), r2 * np.sin(t2), rng.normal(0, R * 0.015, nr)], axis=1))
+        c = [_colors(nb, (1.0, 0.88, 0.65), 0.06, rng), _colors(nd, (0.95, 0.88, 0.75), 0.06, rng), np.ones((nr, 3))]
+        s = [np.full(nb, R * 0.03), np.full(nd, R * 0.02), np.full(nr, R * 0.02)]
+        w = [np.full(nb, 1.2), np.full(nd, 0.8), np.full(nr, -1.8)]
+        if g.key == "g:m104":
+            c.append(_colors(nr, (1.0, 0.9, 0.75), 0.06, rng))
+            s.append(np.full(nr, R * 0.02))
+            w.append(np.full(nr, 1.2))
     elif g.kind == "irregular":
         blobs = rng.normal(0, 1, (7, 3)) * np.array([R * 0.4, R * 0.25, R * 0.08])
         idx = rng.integers(0, len(blobs), n)
@@ -231,12 +278,13 @@ def _generic(g: Galaxy, rng):
         pink = rng.random(n) < 0.04
         cc[pink] = (1.0, 0.45, 0.6)
         c = [cc]
-        s = [np.full(n, R * 0.05)]
+        s = [np.where(pink, R * 0.012, R * 0.025)]
         w = [np.where(pink, 2.0, 1.0)]
     else:   # elliptical
-        p = [_ellipsoid(rng, n, R * 0.35, R * 0.35 * max(g.flat, 0.3) ** 0.5, R * 0.35 * g.flat)]
+        p = [_ellipsoid(rng, n, R * 0.3, R * 0.3 * max(g.flat, 0.3) ** 0.5, R * 0.3 * g.flat)
+             * rng.gamma(1.6, 0.62, (n, 1))]
         c = [_colors(n, (1.0, 0.86, 0.66), 0.05, rng)]
-        s = [np.full(n, R * 0.06)]
+        s = [np.full(n, R * 0.035)]
         w = [np.full(n, 1.0)]
     return np.concatenate(p), np.concatenate(c), np.concatenate(s), np.concatenate(w)
 
@@ -255,7 +303,7 @@ def build() -> np.ndarray:
         data = np.concatenate([pos, size[:, None], wt[:, None], col], axis=1).astype(np.float32)
         g.first, g.n = first, len(data)
         # 銀河をどの距離から見ても、表面の明るさがほぼ同じになるようにする
-        g.k = SURFACE / float(np.sum((size / g.radius_kpc) ** 2 * wt))
+        g.k = SURFACE / float(np.sum((size / g.radius_kpc) ** 2 * np.maximum(wt, 0.0)))
         first += len(data)
         chunks.append(data)
     return np.concatenate(chunks)
