@@ -29,6 +29,7 @@ from . import minorplanets as mpl
 from . import exoplanets as exo
 from . import eclipses
 from . import nebulae as neb
+from . import events as evt
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -349,6 +350,14 @@ class MainWindow(QMainWindow):
         act_ecl.setShortcut(QKeySequence("Ctrl+E"))
         act_ecl.triggered.connect(self._show_eclipses)
         m_ev.addAction(act_ecl)
+        act_met = QAction("流星群…", self)
+        act_met.triggered.connect(self._show_showers)
+        m_ev.addAction(act_met)
+        act_conj = QAction("惑星・月の接近と見ごろ…", self)
+        act_conj.triggered.connect(self._show_events)
+        m_ev.addAction(act_conj)
+        m_ev.addSeparator()
+        self.act_meteor = self._toggle(m_ev, "地上モードで流星を流す", "show_meteors")
 
         m_tour = mb.addMenu("ツアー(&T)")
         for tid, title, _fn in tours.TOURS:
@@ -814,6 +823,156 @@ class MainWindow(QMainWindow):
         b_ground.clicked.connect(lambda: go(True))
         tbl.cellDoubleClicked.connect(lambda *_: go(False))
         dlg.exec()
+
+    def _event_table(self, title, headers, rows, note, on_go):
+        """天文現象の一覧（表）を出す共通のダイアログ。rows: (セルの文字のリスト, 見えるか, データ)。"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(900, 560)
+        lay = QVBoxLayout(dlg)
+        only = QCheckBox(f"{self.view.place}で見えるものだけ")
+        lay.addWidget(only)
+        tbl = QTableWidget(0, len(headers))
+        tbl.setHorizontalHeaderLabels(headers)
+        tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
+        tbl.setSelectionMode(QAbstractItemView.SingleSelection)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.verticalHeader().setVisible(False)
+        tbl.horizontalHeader().setSectionResizeMode(len(headers) - 1, QHeaderView.Stretch)
+        lay.addWidget(tbl, 1)
+        lab = QLabel(note)
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
+        shown = []
+
+        def fill():
+            tbl.setRowCount(0)
+            shown.clear()
+            for cells, vis, data in rows:
+                if only.isChecked() and not vis:
+                    continue
+                r = tbl.rowCount()
+                tbl.insertRow(r)
+                for c, t in enumerate(cells):
+                    it = QTableWidgetItem(t)
+                    if vis:
+                        it.setForeground(QColor(120, 220, 140))
+                    tbl.setItem(r, c, it)
+                shown.append(data)
+            tbl.resizeColumnsToContents()
+            if shown:
+                tbl.selectRow(0)
+
+        only.toggled.connect(fill)
+        fill()
+        bb = QDialogButtonBox()
+        b_go = bb.addButton("地上から見る", QDialogButtonBox.ActionRole)
+        bb.addButton("閉じる", QDialogButtonBox.RejectRole)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+
+        def go(*_):
+            r = tbl.currentRow()
+            if 0 <= r < len(shown):
+                dlg.accept()
+                on_go(shown[r])
+
+        b_go.clicked.connect(go)
+        tbl.cellDoubleClicked.connect(go)
+        dlg.exec()
+
+    def _ground_at(self, jd):
+        v = self.view
+        self.stop_tour()
+        v.paused = True
+        v.set_jd(jd)
+        if not self.btn_ground.isChecked():
+            self.btn_ground.setChecked(True)
+        self.cb_speed.setCurrentIndex(1)       # 1分/秒
+        self._apply_speed()
+        v.paused = True
+        self._refresh_ui()
+
+    def _show_showers(self):
+        if not evt.available():
+            QMessageBox.warning(self, "流星群", "PyEphem（python3-ephem）が必要です。")
+            return
+        v = self.view
+        nights = evt.shower_nights(astro.jd_now() - 2, 370, v.lat, v.lon)
+        rows = []
+        for n in nights:
+            sh = n.shower
+            best = self._local_time(n.jd_best, True) if n.jd_best else "―"
+            cells = [self._local_time(n.jd_peak), sh.name, best,
+                     f"約{n.rate:.0f} 個/時" if n.jd_best else "―", n.condition,
+                     f"放射点の高さ {n.radiant_alt:.0f}°・月 {n.moon_illum * 100:.0f}%・{sh.parent}"]
+            rows.append((cells, n.jd_best is not None and n.rate >= 3, n))
+
+        def go(n):
+            jd = n.jd_best or n.jd_peak
+            self._ground_at(jd)
+            ok = v.look_dir(evt.radiant_vector(n.shower), fov=100.0)
+            self.act_meteor.setChecked(True)
+            msg = f"{n.shower.name}：{n.shower.note}（流れる数は実際の約{v.METEOR_BOOST:.0f}倍に増やしています）"
+            if not ok:
+                msg = "このとき放射点は地平線の下です。" + msg
+            self.statusBar().showMessage(msg, 20000)
+
+        self._event_table(
+            f"流星群（これから1年・観測地 {v.place}）",
+            ["極大", "流星群", "見やすい時刻", "見える数の目安", "月明かり", "くわしく"], rows,
+            "見える数の目安は、空の暗い場所で放射点が高いときの1時間あたりの数です（町なかではもっと少なくなります）。"
+            "流星は放射点から四方へ飛ぶので、放射点だけでなく空全体を広く見るのがこつです。\n"
+            "「地上から見る」で、見やすい時刻の空に流星が流れます（流れる数は実際の約10倍に増やしています）。",
+            go)
+
+    def _show_events(self):
+        if not evt.available():
+            QMessageBox.warning(self, "惑星・月の接近", "PyEphem（python3-ephem）が必要です。")
+            return
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            v = self.view
+            events = evt.find_events(astro.jd_now() - 1, 400, v.lat, v.lon)
+        finally:
+            QApplication.restoreOverrideCursor()
+        rows = []
+        for e in events:
+            loc = e.local
+            if loc.get("jd"):
+                when = self._local_time(loc["jd"], True)
+                look = f"{when}ごろ 高さ {loc['alt']:.0f}°" if loc["visible"] else "見えにくい（低い・明るい空）"
+            else:
+                look = "見えない"
+            det = e.detail
+            if "sep" in loc:
+                det += f"／{v.place}から {loc['sep']:.1f}°"
+            if e.kind == "occult":
+                det += "（地球のどこかで月が惑星をかくす惑星食）"
+            rows.append(([self._local_time(e.jd), e.title, look, det], bool(loc.get("visible")), e))
+
+        def go(e):
+            jd = e.local.get("jd") or e.jd
+            self._ground_at(jd)
+            pos = [v.display_pos(k) for k in e.keys]
+            off, _z, _n, _e = astro.observer_frame(v.jd, v.lat, v.lon)
+            eye = v.positions["earth"] + off
+            dirs = [(p - eye) / np.linalg.norm(p - eye) for p in pos]
+            mid = sum(dirs) / len(dirs)
+            sep = e.local.get("sep", e.sep)       # 観測地から見た離れ角（月は場所で変わる）
+            fov = {"conj": max(6.0, sep * 2.5), "occult": max(4.0, sep * 2.5), "opposition": 40.0,
+                   "elong": 50.0}[e.kind]
+            ok = v.look_dir(mid / np.linalg.norm(mid), fov=fov)
+            if not ok:
+                self.statusBar().showMessage("このとき、観測地では地平線の下です", 8000)
+
+        self._event_table(
+            f"惑星・月の接近と見ごろ（これから1年あまり・観測地 {v.place}）",
+            ["日時", "できごと", f"{v.place}での見やすい時刻", "くわしく"], rows,
+            "日時は、いちばん近づくとき（地球の中心から見た計算）です。月は地球に近いので、見る場所によって近づき方が"
+            "少し変わります。「地上から見る」は、観測地で日の入り後・日の出前の、いちばん高く見える時刻の空を出します。",
+            go)
 
     def _go_eclipse(self, e, ground):
         v = self.view

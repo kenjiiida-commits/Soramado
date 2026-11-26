@@ -7,7 +7,8 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QMatrix3x3, QMatrix4x4, QPainter, QPen, QVector2D, QVector3D, QVector4D
+from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen,
+                           QVector2D, QVector3D, QVector4D)
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture,
                               QOpenGLVertexArrayObject)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
@@ -24,6 +25,7 @@ from . import minorplanets as mpl
 from . import exoplanets as exo
 from . import eclipses
 from . import nebulae as neb
+from . import events as ev
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -223,6 +225,10 @@ class SpaceView(QOpenGLWidget):
         self.gcat = GalaxyCatalog()
         self._sunlight_sky = 1.0
         self.show_nebulae = True
+        self.show_meteors = True
+        self._meteors = []           # いま流れている流星
+        self._meteor_live = False
+        self._meteor_rng = np.random.default_rng()
         self.m_neb = []              # 星雲・星団ごとの粒
         self.show_exo = True
         self.exo = exo.load()        # 系外惑星（ダウンロードしたとき）
@@ -361,6 +367,17 @@ class SpaceView(QOpenGLWidget):
         self.g_alt = math.radians(max(alt, 5.0))
         self.target = key
         self.targetChanged.emit(key)
+        self.update()
+        return alt > 0
+
+    def look_dir(self, direction, fov=None):
+        """地上モードで、その方向（黄道座標の向き）を向く。"""
+        off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+        alt, az = astro.alt_az(np.asarray(direction), zen, north, east)
+        self.g_az = math.radians(az)
+        self.g_alt = math.radians(max(alt, 5.0))
+        if fov:
+            self.g_fov = fov
         self.update()
         return alt > 0
 
@@ -619,7 +636,7 @@ class SpaceView(QOpenGLWidget):
         if self.recording and self._on_frame:
             # 1コマずつ確実に描いて、録画に渡す
             self._on_frame(self.grabFramebuffer())
-        elif not self.paused or self._fly or self._idle_frames < 2:
+        elif not self.paused or self._fly or self._idle_frames < 2 or self._meteor_live:
             QOpenGLWidget.update(self)
             self._idle_frames = 0 if (not self.paused or self._fly) else self._idle_frames + 1
         # 時間が止まっていて何も動いていないときは描き直さない（パソコンの負担を減らす）
@@ -1523,6 +1540,9 @@ class SpaceView(QOpenGLWidget):
                 continue          # 小天体は暗いので、地上からは出さない
             if self.sat_hidden(b.key):
                 continue
+            if self.ground and b.key in sats.BY_KEY and not sats.is_major(sats.BY_KEY[b.key]) \
+                    and b.parent in ("jupiter", "saturn"):
+                continue          # 地上からは見えない小さな衛星の名前は出さない
             pr = self._project(rel[b.key], viewproj, w, h)
             if pr is None:
                 continue
@@ -1584,6 +1604,7 @@ class SpaceView(QOpenGLWidget):
         self._draw_exo_planets(painter, viewproj, w, h, placed, fm)
         self._draw_exo_markers(painter, viewproj, w, h, placed, fm)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
+        self._draw_meteors(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
         painter.end()
 
@@ -1764,13 +1785,95 @@ class SpaceView(QOpenGLWidget):
             dirs = ["北", "北北東", "北東", "東北東", "東", "東南東", "南東", "南南東",
                     "南", "南南西", "南西", "西南西", "西", "西北西", "北西", "北北西"]
             txt = (f"{self.place}　見ている方向: {dirs[int((az + 11.25) // 22.5) % 16]}"
-                   f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.2g}°")
+                   f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.0f}°" if self.g_fov >= 10 else f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.2g}°")
             painter.setPen(QPen(QColor(200, 205, 215)))
             painter.drawText(QPointF(12, h - 12), txt)
             return
         width_au = 2 * self.dist * math.tan(math.radians(self._fov) / 2) * w / h
         painter.setPen(QPen(QColor(170, 180, 200)))
         painter.drawText(QPointF(12, h - 12), "画面の横幅 約 " + format_length(width_au))
+
+    METEOR_BOOST = 10.0       # 流れる数は実際の何倍に増やして見せるか
+
+    def active_showers(self):
+        """いま活動している流星群と、その強さ（極大=1）。"""
+        p = self.positions["earth"]
+        lam = math.degrees(math.atan2(-p[1], -p[0])) % 360.0
+        out = []
+        for sh in ev.SHOWERS:
+            days = (((lam - sh.lam + 180.0) % 360.0) - 180.0) / 0.9856
+            a = math.exp(-math.log(3) * (days / sh.width) ** 2)
+            if a > 0.03:
+                out.append((sh, a))
+        return out
+
+    def _draw_meteors(self, painter, viewproj, w, h, placed, fm):
+        """地上モードで、活動中の流星群の放射点と、流れる流星。"""
+        self._meteor_live = False
+        if not self.ground or not self.show_meteors:
+            self._meteors = []
+            return
+        zen = self._gframe[0]
+        now = time.monotonic()
+        dt = min(0.2, now - getattr(self, "_meteor_t", now))
+        self._meteor_t = now
+        rng = self._meteor_rng
+        dark = self._night
+        for sh, act in self.active_showers():
+            r = ev.radiant_vector(sh)
+            alt = float(np.dot(r, zen))
+            # 放射点の印
+            if alt > 0:
+                pr = self._sky_xy(r, viewproj, w, h)
+                if pr and 0 < pr[0] < w and 0 < pr[1] < h:
+                    painter.setPen(QPen(QColor(255, 210, 120, 200), 1.2))
+                    x, y = pr[0], pr[1]
+                    painter.drawLine(QPointF(x - 7, y), QPointF(x + 7, y))
+                    painter.drawLine(QPointF(x, y - 7), QPointF(x, y + 7))
+                    label = f"{sh.name}の放射点"
+                    placed.append(fm.boundingRect(label).translated(int(x + 10), int(y - 6)))
+                    painter.drawText(QPointF(x + 10, y - 6), label)
+            if alt <= 0 or dark < 0.5:
+                continue
+            # 1秒あたりに流す数（実際の数 × METEOR_BOOST）
+            rate = sh.zhr * act * alt * dark * self.METEOR_BOOST / 3600.0
+            self._meteor_live = True
+            n = rng.poisson(rate * dt)
+            for _ in range(n):
+                # 放射点から 15〜80度はなれたところで光り、放射点から遠ざかる向きに流れる
+                rho = math.radians(rng.uniform(15, 80))
+                t = rng.normal(0, 1, 3)
+                t -= np.dot(t, r) * r
+                t /= np.linalg.norm(t)
+                start = r * math.cos(rho) + t * math.sin(rho)
+                if float(np.dot(start, zen)) < 0.05:
+                    continue
+                length = math.radians(rng.uniform(4, 18) * (0.6 + 0.4 * 66 / max(sh.speed, 20)))
+                dur = rng.uniform(0.25, 0.8) * (60 / sh.speed) ** 0.5
+                self._meteors.append({"r": r, "t": t, "rho": rho, "len": length, "t0": now, "dur": dur,
+                                      "b": rng.uniform(0.4, 1.0)})
+        if self._meteors:
+            self._meteor_live = True
+        keep = []
+        for m in self._meteors:
+            k = (now - m["t0"]) / m["dur"]
+            if k > 1.0:
+                continue
+            keep.append(m)
+            head = m["rho"] + m["len"] * k
+            tail = m["rho"] + m["len"] * max(0.0, k - 0.45)
+            d1 = m["r"] * math.cos(head) + m["t"] * math.sin(head)
+            d0 = m["r"] * math.cos(tail) + m["t"] * math.sin(tail)
+            p1, p0 = self._sky_xy(d1, viewproj, w, h), self._sky_xy(d0, viewproj, w, h)
+            if not p1 or not p0:
+                continue
+            fade = math.sin(math.pi * min(1.0, k)) * m["b"]
+            grad = QLinearGradient(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
+            grad.setColorAt(0.0, QColor(255, 255, 255, 0))
+            grad.setColorAt(1.0, QColor(255, 250, 230, int(255 * fade)))
+            painter.setPen(QPen(QBrush(grad), 1.6 + 1.2 * m["b"]))
+            painter.drawLine(QPointF(p0[0], p0[1]), QPointF(p1[0], p1[1]))
+        self._meteors = keep
 
     def _sky_xy(self, direction, viewproj, w, h):
         return self._project(direction * 1000.0, viewproj, w, h)
