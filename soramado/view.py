@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF,
+from PySide6.QtGui import (QBrush, QPainterPath, QColor, QFont, QImage, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF,
                            QVector2D, QVector3D, QVector4D)
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject, QOpenGLFramebufferObjectFormat,
                               QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture, QOpenGLVertexArrayObject)
@@ -104,6 +104,9 @@ def _format_length_en(au: float) -> str:
     if ly < 1e9:
         return f"{ly / 1e6:,.1f} million ly"
     return f"{ly / 1e9:,.1f} billion ly"
+
+
+_MONTHS_EN = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 def _smooth(a, b, x):
@@ -316,6 +319,11 @@ class SpaceView(QOpenGLWidget):
         self._air = 1.0              # 空気の濃さ（1 = 地上、0 = 宇宙）
         self._lift_done_at = -1e9    # 最後に着いた時刻
         self.show_lift = True        # 地上と宇宙を行き来するとき、飛ぶ様子を見せる
+        # 空の線
+        self.show_ecliptic = False   # 黄道（太陽の通り道）
+        self.show_equator = False    # 天の赤道
+        self.show_meridian = False   # 子午線（地上モード）
+        self.show_altaz = False      # 方位・高度の目盛り（地上モード）
 
         # カメラ（注視点のまわりを回る）
         self.target = "sun"
@@ -2279,6 +2287,193 @@ class SpaceView(QOpenGLWidget):
         y = (1 - (c[1] / c[3] * 0.5 + 0.5)) * h
         return x, y, c[3]
 
+    # ---------------------------------------------------------- 空の線（黄道・天の赤道・子午線・方位高度の目盛り）
+
+    def _project_many(self, dirs, viewproj, w, h):
+        """たくさんの方向をまとめて画面の位置にする。見えない点は nan。"""
+        d = np.asarray(dirs, float)
+        if self.ground and self._atm_on():
+            zen = self._gframe[0]
+            sn = np.clip(d @ zen, -1.0, 1.0)
+            hd = np.degrees(np.arcsin(sn))
+            hc = np.maximum(hd, -1.5)
+            R = np.clip(1.02 / np.tan(np.radians(hc + 10.3 / (hc + 5.11))) / 60.0, 0.0, 0.75)
+            R = np.where(hd < -3.0, 0.0, R)
+            perp = zen[None, :] - d * sn[:, None]
+            pl = np.maximum(np.linalg.norm(perp, axis=1), 1e-9)
+            r = np.radians(R)
+            d = d * np.cos(r)[:, None] + perp / pl[:, None] * np.sin(r)[:, None]
+        v = np.hstack([d * 1000.0, np.ones((len(d), 1))])
+        c = v @ viewproj.T
+        ok = c[:, 3] > 1e-9
+        cw = np.where(ok, c[:, 3], 1.0)
+        nx, ny = c[:, 0] / cw, c[:, 1] / cw
+        ok &= (np.abs(nx) < 4) & (np.abs(ny) < 4)
+        if self.ground and not self.airless:
+            ok &= (d @ self._gframe[0]) > -0.002
+        for u, cr in getattr(self, "_line_hiders", ()):
+            ok &= (d @ u) < cr                 # 空の線は遠くの空にあるので、手前の惑星にかくれる
+        x = np.where(ok, (nx * 0.5 + 0.5) * w, np.nan)
+        y = np.where(ok, (1 - (ny * 0.5 + 0.5)) * h, np.nan)
+        return x, y
+
+    def _poly(self, painter, dirs, viewproj, w, h):
+        """方向の列を線で描く。見えない所や、画面の端をまたぐ所で切る。戻り値: 画面の点の列。"""
+        x, y = self._project_many(dirs, viewproj, w, h)
+        jump = max(w, h) * 0.5
+        path = QPainterPath()          # 1本の線として描く（半透明の線のつなぎ目が濃くならないように）
+        pen_down = False
+        px = py = 0.0
+        for i in range(len(x)):
+            if np.isnan(x[i]):
+                pen_down = False
+                continue
+            xi, yi = float(x[i]), float(y[i])
+            if pen_down and abs(xi - px) + abs(yi - py) <= jump:
+                path.lineTo(xi, yi)
+            else:
+                path.moveTo(xi, yi)
+            pen_down = True
+            px, py = xi, yi
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+        return x, y
+
+    @staticmethod
+    def _circle(a, b, n=720, t0=0.0, t1=2 * math.pi):
+        t = np.linspace(t0, t1, n)
+        return np.cos(t)[:, None] * a[None, :] + np.sin(t)[:, None] * b[None, :]
+
+    def _label_on_line(self, painter, x, y, w, h, text, color):
+        """線の上の、画面の左寄りの見える所に名前を書く。"""
+        ok = ~np.isnan(x) & (x > 40) & (x < w - 120) & (y > 40) & (y < h - 60)
+        if not ok.any():
+            return
+        idx = np.where(ok)[0]
+        i = idx[np.argmin(np.abs(x[idx] - w * 0.18))]
+        painter.setPen(color)
+        painter.drawText(QPointF(float(x[i]) + 4, float(y[i]) - 5), text)
+
+    def _mark(self, painter, direction, viewproj, w, h, text, color):
+        x, y = self._project_many(direction[None, :], viewproj, w, h)
+        if np.isnan(x[0]) or not (0 <= x[0] <= w and 0 <= y[0] <= h):
+            return
+        painter.setPen(QPen(color, 1.4))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPointF(float(x[0]), float(y[0])), 4, 4)
+        painter.drawText(QPointF(float(x[0]) + 7, float(y[0]) + 14), text)
+
+    @staticmethod
+    def _sun_lon_j2000(jd):
+        """太陽の黄経 [rad]（J2000 の黄道座標、だいたいの式。誤差 0.01 度ほど）。"""
+        d = jd - 2451545.0
+        L = 280.460 + 0.9856474 * d
+        g = math.radians(357.528 + 0.9856003 * d)
+        lam = L + 1.915 * math.sin(g) + 0.020 * math.sin(2 * g)
+        lam -= 1.3970 * d / 36525.0              # その日の春分点 → J2000
+        return math.radians(lam % 360.0)
+
+    def _draw_sky_lines(self, painter, viewproj, w, h):
+        lines = self.show_ecliptic or self.show_equator or (self.ground and (self.show_meridian or self.show_altaz))
+        if not lines or self._lift_cam is not None:
+            return
+        k = 1.0 if self.ground else getattr(self, "_con_fade", 1.0)
+        if k < 0.02:
+            return
+        self._line_hiders = []
+        if not self.ground:
+            for b in BODIES:
+                rel = self.display_pos(b.key) - self._eye
+                L = float(np.linalg.norm(rel))
+                r = self.display_radius(b.key)
+                if L > r and r / L > 0.003:
+                    self._line_hiders.append((rel / L, math.cos(math.asin(r / L))))
+        font0 = painter.font()
+        font = QFont(font0)
+        font.setPointSizeF(9.5)
+        painter.setFont(font)
+        painter.setRenderHint(QPainter.Antialiasing)
+        ex, ey, ez = np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), np.array([0, 0, 1.0])
+        pole = astro.equatorial_to_ecliptic(astro.precession_matrix(self.jd).T @ ez)    # その日の天の北極
+        vernal = np.cross(pole, ez)              # 黄道と赤道の交わる点のうち、黄経0度の側
+        vernal /= np.linalg.norm(vernal)
+
+        if self.show_altaz and self.ground:
+            zen, north, east = self._gframe
+            col = QColor(110, 190, 190, int(95 * k))
+            painter.setPen(QPen(col, 1.0))
+            for alt in range(10, 90, 10):
+                a = math.radians(alt)
+                self._poly(painter, zen * math.sin(a) + self._circle(north, east) * math.cos(a), viewproj, w, h)
+            for az in range(0, 360, 30):
+                hd = north * math.cos(math.radians(az)) + east * math.sin(math.radians(az))
+                self._poly(painter, self._circle(hd, zen, 60, 0.0, math.radians(80)), viewproj, w, h)
+            # 高度の数字は、いま見ている方位にそって書く
+            hd = north * math.cos(self.g_az) + east * math.sin(self.g_az)
+            painter.setPen(QColor(150, 220, 220, int(200 * k)))
+            for alt in range(10, 90, 10):
+                a = math.radians(alt)
+                x, y = self._project_many((hd * math.cos(a) + zen * math.sin(a))[None, :], viewproj, w, h)
+                if not np.isnan(x[0]):
+                    painter.drawText(QPointF(float(x[0]) + 3, float(y[0]) - 3), f"{alt}°")
+            for az in range(0, 360, 30):
+                if az % 90 == 0:
+                    continue         # 東西南北は地平線に書いてある
+                d = north * math.cos(math.radians(az)) + east * math.sin(math.radians(az))
+                x, y = self._project_many((d * math.cos(0.035) + zen * math.sin(0.035))[None, :], viewproj, w, h)
+                if not np.isnan(x[0]):
+                    painter.drawText(QPointF(float(x[0]) + 3, float(y[0]) - 3), f"{az}°")
+
+        if self.show_meridian and self.ground:
+            zen, north, east = self._gframe
+            col = QColor(130, 225, 140, int(200 * k))
+            painter.setPen(QPen(col, 1.2))
+            x, y = self._poly(painter, self._circle(north, zen), viewproj, w, h)
+            self._label_on_line(painter, x, y, w, h, tr("子午線"), col)
+
+        if self.show_equator:
+            col = QColor(110, 165, 255, int(210 * k))
+            painter.setPen(QPen(col, 1.3))
+            b = np.cross(pole, vernal)
+            x, y = self._poly(painter, self._circle(vernal, b), viewproj, w, h)
+            self._label_on_line(painter, x, y, w, h, tr("天の赤道"), col)
+
+        if self.show_ecliptic:
+            col = QColor(255, 190, 80, int(220 * k))
+            painter.setPen(QPen(col, 1.4))
+            x, y = self._poly(painter, self._circle(ex, ey), viewproj, w, h)
+            self._label_on_line(painter, x, y, w, h, tr("黄道"), col)
+            # 太陽が黄道のどこにいるか（各月の1日）
+            dt = astro.datetime_from_jd(self.jd)
+            mcol = QColor(255, 215, 140, int(200 * k))
+            for m in range(1, 13):
+                try:
+                    jd1 = astro.jd_from_datetime(dt.replace(month=m, day=1, hour=0, minute=0, second=0, microsecond=0))
+                except ValueError:
+                    continue
+                lam = self._sun_lon_j2000(jd1)
+                d = np.array([math.cos(lam), math.sin(lam), 0.0])
+                xs, ys = self._project_many(np.array([d, d * math.cos(0.012) + ez * math.sin(0.012)]), viewproj, w, h)
+                if np.isnan(xs).any() or not (0 <= xs[0] <= w and 0 <= ys[0] <= h):
+                    continue
+                painter.setPen(QPen(mcol, 1.2))
+                vx, vy = xs[1] - xs[0], ys[1] - ys[0]
+                n = math.hypot(vx, vy) or 1.0
+                vx, vy = vx / n * 6, vy / n * 6
+                painter.drawLine(QPointF(xs[0] - vx, ys[0] - vy), QPointF(xs[0] + vx, ys[0] + vy))
+                painter.drawText(QPointF(float(xs[0] + vx * 1.6) - 8, float(ys[0] + vy * 1.6) - 2), _MONTHS_EN[m - 1] if EN_MODE else f"{m}月")
+
+        if self.show_ecliptic or self.show_equator:
+            pcol = QColor(255, 120, 200, int(230 * k))
+            summer = np.cross(ez, vernal)            # 黄道にそって春分点から90度
+            self._mark(painter, vernal, viewproj, w, h, tr("春分点"), pcol)
+            self._mark(painter, -vernal, viewproj, w, h, tr("秋分点"), pcol)
+            if self.show_ecliptic:
+                self._mark(painter, summer, viewproj, w, h, tr("夏至点"), pcol)
+                self._mark(painter, -summer, viewproj, w, h, tr("冬至点"), pcol)
+        painter.setFont(font0)
+        self._line_hiders = []
+
     def _draw_overlay(self, rel, viewproj, w, h):
         painter = QPainter(self)
         try:
@@ -2299,6 +2494,7 @@ class SpaceView(QOpenGLWidget):
         order = sorted(BODIES, key=lambda b: (b.key != self.target, b.key != "sun", -b.radius_km))
         placed = []
         fm = painter.fontMetrics()
+        self._draw_sky_lines(painter, viewproj, w, h)
         far = getattr(self, "_sun_far", 0.0) > 3000.0
         # 大きく見えている天体の円（この後ろにある天体や星の名前は出さない）
         discs = []

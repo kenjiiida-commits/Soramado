@@ -74,6 +74,15 @@ steps += [lambda: w.btn_ground.click(), wait, wait, wait, lambda: w.btn_ground.c
           lambda: w.stop_tour(), lambda: setattr(v, "show_lift", False), lambda: w.btn_ground.click(),
           lambda: w.btn_ground.click(), lambda: setattr(v, "show_lift", True),
           lambda: w._set_ground_checked(False)]
+# 空の線（宇宙・地上・大気なし・英語の月名）
+steps += [lambda: w.btn_ecl.setChecked(True), lambda: w.act_equ.setChecked(True), lambda: v.set_target("earth", fly=False),
+          lambda: v.set_target("saturn", fly=False), lambda: w._set_ground_checked(True),
+          lambda: w.act_mer.setChecked(True), lambda: w.act_altaz.setChecked(True),
+          lambda: setattr(v, "g_alt", 1.55), lambda: setattr(v, "g_alt", -0.3), lambda: w.btn_airless.setChecked(True),
+          lambda: setattr(v, "g_fov", 2.0), lambda: setattr(v, "g_fov", 90.0), lambda: w.btn_airless.setChecked(False),
+          lambda: v.set_jd(2378496.5), lambda: v.set_jd(2461371.0), lambda: w._set_ground_checked(False),
+          lambda: setattr(v, "dist", 5e6), lambda: v.set_target("earth", fly=False),
+          lambda: [a.setChecked(False) for a in (w.act_ecl, w.act_equ, w.act_mer, w.act_altaz)]]
 for i in range(w.cb_target.count()):
     k = w.cb_target.itemData(i)
     if k: steps.append(lambda k=k: v.set_target(k, fly=False))

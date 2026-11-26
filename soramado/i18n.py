@@ -127,6 +127,7 @@ EN_HELP = """<h3>Controls</h3>
 <tr><td><b>Ctrl+S</b></td><td>Save a screenshot (Pictures/Soramado)</td></tr>
 <tr><td><b>Ctrl+R</b></td><td>Start / stop recording (Videos/Soramado, needs ffmpeg)</td></tr>
 <tr><td><b>Ctrl+E</b></td><td>List of eclipses</td></tr>
+<tr><td><b>Ctrl+L</b></td><td>Show/hide the ecliptic line</td></tr>
 <tr><td><b>Ctrl+F</b></td><td>Find an object by name</td></tr>
 </table>
 <p><b>View from ground (planetarium)</b>: left drag to look around, wheel to change the field of view.</p>
@@ -315,6 +316,19 @@ EN.update({
     "20万年前": "200,000 years ago", "今": "Now", "20万年後": "200,000 years ahead",
     "◀ 過去へ動かす": "◀ Into the past", "止める": "Stop", "未来へ動かす ▶": "Into the future ▶", "今に戻す": "Back to now",
     "見る星座:": "Constellation:", "明るい星の動いた跡を線で出す": "Show the paths of bright stars", "今の星の位置": "Star positions today",
+    "〰 黄道": "〰 Ecliptic",
+    "黄道（太陽の通り道）を表示します。惑星はこの線の近くを動きます": "Show the ecliptic (the Sun's path). Planets move near this line",
+    "空の線": "Sky lines",
+    "黄道（太陽の通り道・各月の太陽の位置）": "Ecliptic (Sun's path, with the Sun's position each month)",
+    "天の赤道": "Celestial equator",
+    "子午線（地上モード）": "Meridian (ground mode)",
+    "方位・高度の目盛り（地上モード）": "Azimuth/altitude grid (ground mode)",
+    "子午線": "Meridian",
+    "黄道": "Ecliptic",
+    "春分点": "March equinox",
+    "秋分点": "September equinox",
+    "夏至点": "June solstice",
+    "冬至点": "December solstice",
     "地上と宇宙を行き来するとき、飛び立つ・着陸する様子を見せる": "Animate take-off and landing between ground and space",
     "対流圏（雲や雨ができるところ）": "Troposphere (where clouds and rain form)",
     "成層圏（オゾン層があるところ）": "Stratosphere (home of the ozone layer)",

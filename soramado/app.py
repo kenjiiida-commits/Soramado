@@ -87,6 +87,7 @@ HELP_TEXT = tr("""<h3>操作方法</h3>
 <tr><td><b>Ctrl+S</b></td><td>画面を画像で保存（ピクチャ/Soramado）</td></tr>
 <tr><td><b>Ctrl+R</b></td><td>録画の開始・停止（ビデオ/Soramado、ffmpeg が必要）</td></tr>
 <tr><td><b>Ctrl+E</b></td><td>日食・月食の一覧</td></tr>
+<tr><td><b>Ctrl+L</b></td><td>黄道（太陽の通り道）の線を出す・消す</td></tr>
 <tr><td><b>Ctrl+F</b></td><td>天体を名前で探す（星座・星雲・星団。小惑星・系外惑星はダウンロードしたとき）</td></tr>
 <tr><td><b>星座名をダブルクリック</b></td><td>星座の解説（見ごろ・見つけ方・神話）</td></tr>
 </table>
@@ -215,6 +216,10 @@ class MainWindow(QMainWindow):
         self.btn_airless.setToolTip(tr("地上から見るとき、空気も地面もないものとして見ます（昼でも星が見え、地平線の下も見える）"))
         self.btn_airless.toggled.connect(self._on_airless)
         tb.addWidget(self.btn_airless)
+        self.btn_ecl = QPushButton(tr("〰 黄道"))
+        self.btn_ecl.setCheckable(True)
+        self.btn_ecl.setToolTip(tr("黄道（太陽の通り道）を表示します。惑星はこの線の近くを動きます"))
+        tb.addWidget(self.btn_ecl)
         self.cb_place = QComboBox()
         for name, lat, lon in PLACES:
             self.cb_place.addItem(name, (name, lat, lon))
@@ -383,6 +388,14 @@ class MainWindow(QMainWindow):
             m_lp.addAction(a)
             self._lp_acts[b] = a
         self.act_trails = self._toggle(m_view, tr("惑星と月の通った跡（地上モード）"), "show_trails")
+        m_lines = m_view.addMenu(tr("空の線"))
+        self.act_ecl = self._toggle(m_lines, tr("黄道（太陽の通り道・各月の太陽の位置）"), "show_ecliptic")
+        self.act_equ = self._toggle(m_lines, tr("天の赤道"), "show_equator")
+        self.act_mer = self._toggle(m_lines, tr("子午線（地上モード）"), "show_meridian")
+        self.act_altaz = self._toggle(m_lines, tr("方位・高度の目盛り（地上モード）"), "show_altaz")
+        self.act_ecl.setShortcut("Ctrl+L")
+        self.act_ecl.toggled.connect(self.btn_ecl.setChecked)
+        self.btn_ecl.toggled.connect(self.act_ecl.setChecked)
         act_ct = QAction(tr("通った跡を消す"), self)
         act_ct.triggered.connect(self.view.clear_trails)
         m_view.addAction(act_ct)
@@ -504,7 +517,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto", "show_atmosphere", "show_trails", "show_lift")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto", "show_atmosphere", "show_trails", "show_lift", "show_ecliptic", "show_equator", "show_meridian", "show_altaz")
 
     def _restore_settings(self):
         st = self.settings
@@ -517,7 +530,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto, "show_atmosphere": self.act_atm, "show_trails": self.act_trails, "show_lift": self.act_lift}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto, "show_atmosphere": self.act_atm, "show_trails": self.act_trails, "show_lift": self.act_lift, "show_ecliptic": self.act_ecl, "show_equator": self.act_equ, "show_meridian": self.act_mer, "show_altaz": self.act_altaz}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
