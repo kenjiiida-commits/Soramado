@@ -327,6 +327,7 @@ EN.update({
     "No air: viewing as if there were no air and no ground (stars in daytime, sky below the horizon)",
     "1秒に ": "", " 日": " days/s", "コマ送りで、1秒に何日分進めるか": "Days advanced per second when stepping",
     "惑星と月の通った跡（地上モード）": "Paths of planets && the Moon (ground view)", "通った跡を消す": "Clear paths",
+    "空の暗さ（光害）": "Sky darkness (light pollution)",
     "地上の風景": "Landscape", "自分の360°写真を読み込む…": "Load my own 360° photo…",
     "風景は「地上から見る」のときに出ます": "The landscape appears in \"View from ground\"",
     "360°写真（正距円筒図）を選ぶ": "Choose a 360° photo (equirectangular)", "画像 (*.png *.jpg *.jpeg *.webp)": "Images (*.png *.jpg *.jpeg *.webp)",

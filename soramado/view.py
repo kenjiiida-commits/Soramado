@@ -57,6 +57,13 @@ GLOW_EXPOSURE = 1.3          # 星雲・銀河の明るさ（圧縮する前に�
 PHOTO_GAIN = 0.85            # 写真の明るさ
 _c, _s = math.cos(astro.OBLIQUITY_J2000), math.sin(astro.OBLIQUITY_J2000)
 ECL2EQ = np.array([[1.0, 0.0, 0.0], [0.0, _c, -_s], [0.0, _s, _c]])   # 黄道座標 → 赤道座標
+# 光害（ボートル・スケール 1〜9）: 目で見える限界等級・天の川の見え方・空の明るさ
+LIGHT_POLLUTION = [(1, "とても暗い空（山の上・離島）", "Very dark (mountains, islands)"),
+                   (3, "暗い空（田舎）", "Dark (countryside)"), (5, "郊外の住宅地", "Suburban"),
+                   (7, "街なか", "City"), (9, "都心", "City centre")]
+NELM = {1: 7.5, 2: 7.1, 3: 6.6, 4: 6.1, 5: 5.6, 6: 5.1, 7: 4.6, 8: 4.2, 9: 4.0}
+MW_VIS = {1: 1.0, 2: 1.0, 3: 0.9, 4: 0.6, 5: 0.35, 6: 0.15, 7: 0.04, 8: 0.0, 9: 0.0}
+SKY_GLOW = {1: 0.0, 2: 0.02, 3: 0.06, 4: 0.12, 5: 0.22, 6: 0.35, 7: 0.55, 8: 0.75, 9: 1.0}
 MW_GAINS = (0.25, 0.4, 0.65, 1.0)   # 天の川の写真の明るさ（控えめ・ふつう・明るめ・とても明るい）
 PHOTO_FLIP = 1               # 写真の上下（テクスチャの向き）
 
@@ -263,6 +270,7 @@ class SpaceView(QOpenGLWidget):
         self.show_mwphoto = True
         self.show_atmosphere = True
         self.landscape = None          # 地上の風景（landscape.Landscape）
+        self.bortle = 3                # 光害（ボートル・スケール）
         self.airless = False           # 大気なし（地上モード）: 黒い空・地面なし・大気の効果なし
         self.step_unit = None          # コマ送りの1コマ [日]（恒星日・太陽日）。None は普通の再生
         self.step_rate = 10.0          # コマ送りで1秒に進む日数
@@ -894,7 +902,7 @@ class SpaceView(QOpenGLWidget):
         f.glBlendFunc(GL_ONE, GL_ONE)
         for i, (n, m) in enumerate(zip(neb.NEBULAE, self.m_neb)):
             pw = 1.0 - 0.92 * self._photo_w.get(f"n:{i}", 0.0)     # 写真を出すときは模式図を薄く
-            p.setUniformValue1f("u_haze_gain", float(k * 2.2 * pw))
+            p.setUniformValue1f("u_haze_gain", float(k * 2.2 * pw * (0.25 + 0.75 * self._lp_dim())))
             c = n.pos - self._eye
             d = float(np.linalg.norm(c))
             # 星団の星は、近づくほど明るく見える（地球から見たときを基準に）
@@ -1134,7 +1142,7 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue("u_center", QVector3D(*(c * s)))
             p.setUniformValue("u_ax1", QVector3D(*(a1 * s)))
             p.setUniformValue("u_ax2", QVector3D(*(a2 * s)))
-            p.setUniformValue1f("u_gain", float(w * PHOTO_GAIN))
+            p.setUniformValue1f("u_gain", float(w * PHOTO_GAIN * (0.25 + 0.75 * self._lp_dim())))
             f.glActiveTexture(GL_TEXTURE0)
             tex.bind(0)
             self.m_quad.draw(f)
@@ -1161,8 +1169,15 @@ class SpaceView(QOpenGLWidget):
             return 0.0
         w = 1.0 - _smooth(200 * LY_AU, 4000 * LY_AU, sun_far)
         if self.ground:
-            w *= self._night
+            w *= self._night * self._lp_dim()
         return w
+
+    def _lp_on(self) -> bool:
+        return self.ground and not self.airless
+
+    def _lp_dim(self) -> float:
+        """光害で、天の川・星雲・銀河がどれくらい見えるか（0〜1）。"""
+        return MW_VIS[self.bortle] if self._lp_on() else 1.0
 
     def _draw_mwsky(self, f, viewproj, w):
         if w <= 0.005:
@@ -1268,6 +1283,7 @@ class SpaceView(QOpenGLWidget):
         day = _smooth(-8.0, 6.0, sa) * (0.15 + 0.85 * self._sunlight_sky)
         warm = 1.0 - _smooth(0.0, 15.0, sa)
         light = np.array([1.0, 1.0 - 0.25 * warm, 1.0 - 0.5 * warm]) * (0.03 + 0.97 * day)
+        light += np.array([0.10, 0.07, 0.04]) * SKY_GLOW[self.bortle] * (1 - day)   # 街明かりでうっすら照らされる
         p.setUniformValue("u_light", QVector3D(*light))
         p.setUniformValue1f("u_night", float(1.0 - _smooth(-6.0, 2.0, sa)))
         p.setUniformValue1i("u_tex", 0)
@@ -1636,6 +1652,7 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue("u_sun", QVector3D(*(sun / np.linalg.norm(sun))))
         p.setUniformValue1f("u_sunalt", float(self._sun_alt))
         p.setUniformValue1f("u_sunlight", float(self._sunlight_sky))
+        p.setUniformValue1f("u_lp", float(SKY_GLOW[self.bortle]))
         p.setUniformValue1i("u_mode", mode)
         self.m_glow.draw(f)
         p.release()
@@ -1721,6 +1738,8 @@ class SpaceView(QOpenGLWidget):
                 # 空が明るいほど星は見えない
                 night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky
                 limit = self.limit_mag - (1.0 - night) * 7.0
+                # 光害: 暗い空（限界等級6.5）を基準に、見える星の限界を変える
+                limit = min(limit, self.limit_mag - (6.5 - NELM[self.bortle]))
         self._night = night
 
         # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）

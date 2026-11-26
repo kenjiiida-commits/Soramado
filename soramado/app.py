@@ -368,6 +368,18 @@ class MainWindow(QMainWindow):
         self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
         self.act_mwphoto = self._toggle(m_view, tr("天の川を写真で表示（ダウンロードしたもの）"), "show_mwphoto")
         self.act_atm = self._toggle(m_view, tr("大気の効果（地上モード：浮き上がり・減光・空の色）"), "show_atmosphere")
+        m_lp = m_view.addMenu(tr("空の暗さ（光害）"))
+        from PySide6.QtGui import QActionGroup
+        self._lp_grp = QActionGroup(self)
+        self._lp_acts = {}
+        from .view import LIGHT_POLLUTION
+        for b, ja, en in LIGHT_POLLUTION:
+            a = QAction(en if EN_MODE else ja, self, checkable=True)
+            a.setChecked(b == self.view.bortle)
+            a.triggered.connect(lambda _=False, b=b: self._set_bortle(b))
+            self._lp_grp.addAction(a)
+            m_lp.addAction(a)
+            self._lp_acts[b] = a
         self.act_trails = self._toggle(m_view, tr("惑星と月の通った跡（地上モード）"), "show_trails")
         act_ct = QAction(tr("通った跡を消す"), self)
         act_ct.triggered.connect(self.view.clear_trails)
@@ -511,6 +523,12 @@ class MainWindow(QMainWindow):
         if st.value("view/limit") is not None:
             self.sl_stars.setValue(int(st.value("view/limit")))
         try:
+            b = int(st.value("view/bortle", 3))
+            if b in self._lp_acts:
+                self._set_bortle(b)
+        except (TypeError, ValueError):
+            pass
+        try:
             self.sp_step.setValue(int(st.value("time/step_rate", 10)))
         except (TypeError, ValueError):
             pass
@@ -597,6 +615,13 @@ class MainWindow(QMainWindow):
         self._land_acts["file"].setChecked(True)
         if save:
             self.settings.setValue("view/landscape", f"file|{path}|{north}")
+
+    def _set_bortle(self, b):
+        self.view.bortle = b
+        if b in self._lp_acts:
+            self._lp_acts[b].setChecked(True)
+        self.settings.setValue("view/bortle", b)
+        self.view.update()
 
     def _set_mw_level(self, i):
         self.view.mw_level = i
