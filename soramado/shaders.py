@@ -400,3 +400,59 @@ void main() {
     frag = vec4(col, 1.0);
 }
 """
+
+# ---------------------------------------------------------------- クエーサー（点）
+QSO_VS = """#version 330 core
+layout(location=0) in vec3 a_pos;     // 太陽中心 [AU]
+layout(location=1) in vec3 a_rgb;
+uniform vec3 u_eye;
+uniform mat4 u_viewproj;
+uniform float u_gain;
+uniform float u_px;
+out vec3 v_col;
+void main() {
+    vec3 rel = a_pos - u_eye;
+    float d = max(length(rel), 1.0);
+    gl_Position = u_viewproj * vec4(rel / d * 1000.0, 1.0);
+    gl_PointSize = 2.0 * u_px;
+    v_col = a_rgb * u_gain;
+}
+"""
+
+QSO_FS = """#version 330 core
+in vec3 v_col;
+out vec4 frag;
+void main() {
+    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(p, p);
+    if (r2 > 1.0) discard;
+    frag = vec4(v_col * exp(-r2 * 2.0), 1.0);
+}
+"""
+
+# ---------------------------------------------------------------- 宇宙マイクロ波背景放射の球
+CMB_VS = """#version 330 core
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec2 a_uv;
+uniform mat4 u_model;
+uniform mat4 u_viewproj;
+out vec2 v_uv;
+out vec3 v_dir;
+void main() {
+    vec4 w = u_model * vec4(a_pos, 1.0);
+    v_uv = a_uv;
+    v_dir = w.xyz;
+    gl_Position = u_viewproj * w;
+}
+"""
+
+CMB_FS = """#version 330 core
+in vec2 v_uv;
+in vec3 v_dir;
+uniform sampler2D u_tex;
+uniform float u_alpha;
+out vec4 frag;
+void main() {
+    frag = vec4(texture(u_tex, v_uv).rgb * u_alpha, 1.0);
+}
+"""

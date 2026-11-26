@@ -18,6 +18,7 @@ from . import galaxies as gx
 from .galaxy_catalog import GalaxyCatalog
 from . import satellites as sats
 from . import smallbodies as sbs
+from . import cosmos
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -40,9 +41,9 @@ GL_PROGRAM_POINT_SIZE = 0x8642
 
 FOV_DEG = 45.0
 NEAR_AU = 1e-10
-FAR_AU = 1e16
+FAR_AU = 1e18
 LOGC = astro.AU_KM            # 対数デプスは km 単位で計算する
-MAX_DIST_AU = 1.5e14         # 約24億光年
+MAX_DIST_AU = 8e15           # 約1300億光年（観測できる宇宙の外から眺められる）
 LY_AU = gx.LY_AU
 KM = 1.0 / astro.AU_KM
 
@@ -210,6 +211,9 @@ class SpaceView(QOpenGLWidget):
         self.selected_star = -1
         self.show_galaxies = True
         self.show_small = True
+        self.show_quasars = True
+        self.show_cmb = True
+        self.qso_count = 0
         self.gcat = GalaxyCatalog()
 
         # 地上モード（プラネタリウム）
@@ -251,7 +255,7 @@ class SpaceView(QOpenGLWidget):
         self.update()
 
     def is_galaxy(self, key: str) -> bool:
-        return key in gx.BY_KEY or key.startswith("c:")
+        return key in gx.BY_KEY or key.startswith("c:") or key == "u:cmb"
 
     def set_target(self, key: str, fly: bool = True):
         if key not in BY_KEY and not self.is_galaxy(key):
@@ -343,7 +347,7 @@ class SpaceView(QOpenGLWidget):
 
     def _galaxy_view_dir(self, key):
         """銀河へ行くときの見下ろす向き（カメラが注視点のどちら側にいるか）。"""
-        if not self.is_galaxy(key):
+        if not self.is_galaxy(key) or key == "u:cmb":
             return None
         if key.startswith("c:"):
             i = int(key[2:])
@@ -374,6 +378,8 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- 大きさ・位置
 
     def display_radius(self, key: str) -> float:
+        if key == "u:cmb":
+            return cosmos.CMB_AU
         if key.startswith("c:"):
             return float(self.gcat.radius[int(key[2:])])
         if key in gx.BY_KEY:
@@ -397,6 +403,8 @@ class SpaceView(QOpenGLWidget):
         return self.sat_scale("earth")
 
     def display_pos(self, key: str) -> np.ndarray:
+        if key == "u:cmb":
+            return self.positions["sun"]
         if key.startswith("c:"):
             return self.gcat.center[int(key[2:])]
         if key in gx.BY_KEY:
@@ -408,11 +416,15 @@ class SpaceView(QOpenGLWidget):
         return self.positions[key]
 
     def _min_dist(self, key):
+        if key == "u:cmb":
+            return 1.0
         if self.is_galaxy(key):
             return self.display_radius(key) * 0.05
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
+        if key == "u:cmb":
+            return cosmos.CMB_AU * 2.6
         if self.is_galaxy(key):
             return self.display_radius(key) * (2.3 if key == "g:mw" else 2.8)
         if key == "sun":
@@ -492,6 +504,10 @@ class SpaceView(QOpenGLWidget):
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
         self.m_galaxies = _Mesh(gx.build(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
+        self.p_qso = prog(shaders.QSO_VS, shaders.QSO_FS)
+        self.p_cmb = prog(shaders.CMB_VS, shaders.CMB_FS)
+        self.m_qso = None
+        self._load_quasars()
         self.p_gcat = prog(shaders.GCAT_VS, shaders.GCAT_FS)
         self.m_gcat = _Mesh(self.gcat.vertex_data(),
                             [(0, 2), (1, 3), (2, 3), (3, 3), (4, 1), (5, 3), (6, 1), (7, 1)], GL_TRIANGLES)
@@ -551,6 +567,28 @@ class SpaceView(QOpenGLWidget):
                     self.tex[f"{b.key}:{kind}"] = make(img, repeat=(kind != "ring"))
         if "saturn:ring" not in self.tex:
             self.tex["saturn:ring"] = make(textures.procedural_ring(), repeat=False)
+        if "cmb" not in self.tex:
+            self.tex["cmb"] = make(cosmos.cmb_texture())
+
+    def _load_quasars(self):
+        q = cosmos.load_quasars()
+        if q is None:
+            return
+        data = cosmos.quasar_vertices(*q)
+        if self.m_qso is None:
+            self.m_qso = _Mesh(data, [(0, 3), (1, 3)], GL_POINTS)
+        else:
+            self.m_qso.update(data)
+        self.qso_count = len(data)
+
+    def reload_quasars(self):
+        """ダウンロードが終わったら呼ぶ。"""
+        if self.context() is None:
+            return
+        self.makeCurrent()
+        self._load_quasars()
+        self.doneCurrent()
+        self.update()
 
     def _rebuild_orbits(self):
         for key in ("mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune", "pluto"):
@@ -589,6 +627,40 @@ class SpaceView(QOpenGLWidget):
             self.m_orbits["moon"] = _Mesh(pts, [(0, 3)], GL_LINE_STRIP)
         self._moon_orbit_jd = self.jd
         self._moon_orbit_at = time.monotonic()
+
+    def _draw_far_universe(self, f, viewproj, eye, sun_rel, sun_far):
+        """宇宙マイクロ波背景放射の球と、クエーサー。"""
+        gly = cosmos.GLY_AU
+        if self.show_cmb:
+            k = _smooth(3 * gly, 25 * gly, sun_far)
+            if k > 0.01:
+                p = self.p_cmb
+                p.bind()
+                p.setUniformValue("u_viewproj", _qmat(viewproj))
+                model = np.eye(4)
+                model[:3, :3] *= cosmos.CMB_AU
+                model[:3, 3] = sun_rel
+                p.setUniformValue("u_model", _qmat(model))
+                # 球の内側にいるときは背景として淡く、外から見るときははっきり
+                inside = sun_far < cosmos.CMB_AU
+                p.setUniformValue1f("u_alpha", float(k * (0.22 if inside else 0.45)))
+                p.setUniformValue1i("u_tex", 0)
+                self.tex["cmb"].bind(0)
+                self.m_sphere.draw(f)
+                p.release()
+        if self.show_quasars and self.m_qso is not None:
+            k = _smooth(0.05 * gly, 1.0 * gly, sun_far)
+            if k > 0.01:
+                p = self.p_qso
+                p.bind()
+                p.setUniformValue("u_viewproj", _qmat(viewproj))
+                p.setUniformValue("u_eye", QVector3D(*eye))
+                # 遠くから見ると点が重なって真っ白になるので、離れるほど一つ一つを暗くする
+                crowd = min(1.0, 8 * gly / max(sun_far, 1.0))
+                p.setUniformValue1f("u_gain", float(0.55 * k * crowd))
+                p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
+                self.m_qso.draw(f)
+                p.release()
 
     def _draw_galaxies(self, f, viewproj, eye, focal, h):
         p = self.p_galaxy
@@ -720,6 +792,8 @@ class SpaceView(QOpenGLWidget):
         f.glEnable(GL_BLEND)
         f.glBlendFunc(GL_ONE, GL_ONE)
         f.glEnable(GL_PROGRAM_POINT_SIZE)
+        if not self.ground:
+            self._draw_far_universe(f, viewproj, eye, sun_rel, sun_far)
         if self.show_galaxies and not self.ground:
             self._draw_galaxies(f, viewproj, eye, focal, h)
             p = self.p_gcat
@@ -730,7 +804,8 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue("u_up", QVector3D(*up))
             p.setUniformValue1f("u_focal", float(focal))
             # 太陽系の中から見るときは、遠くの銀河は暗すぎて見えないので出さない
-            p.setUniformValue1f("u_gain", float(0.7 * _smooth(30 * LY_AU, 3000 * LY_AU, sun_far)))
+            crowd = min(1.0, 1.5e9 * LY_AU / max(sun_far, 1.0))
+            p.setUniformValue1f("u_gain", float(0.7 * _smooth(30 * LY_AU, 3000 * LY_AU, sun_far) * crowd))
             self.m_gcat.draw(f)
             p.release()
         if self.show_con_lines and self._con_fade > 0.01:
@@ -971,6 +1046,15 @@ class SpaceView(QOpenGLWidget):
             self._draw_compass(painter, viewproj, w, h, placed, fm)
         else:
             self._draw_galaxy_labels(painter, viewproj, w, h, placed, fm, focal)
+        if self.show_cmb and getattr(self, "_sun_far", 0) > cosmos.CMB_AU * 1.05:
+            top = rel["sun"] + self._basis[1] * cosmos.CMB_AU
+            pr = self._project(top, viewproj, w, h)
+            if pr:
+                painter.setPen(QPen(QColor(255, 200, 150)))
+                rect = fm.boundingRect("宇宙マイクロ波背景放射（観測できる宇宙の果て・模式図）")
+                rect.moveCenter(QPointF(pr[0], pr[1] - 14).toPoint())
+                painter.drawText(rect, Qt.AlignCenter, "宇宙マイクロ波背景放射（観測できる宇宙の果て・模式図）")
+                placed.append(rect)
         if self.show_small and not self.ground and not far:
             self._draw_comet_tails(painter, rel, viewproj, w, h)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)

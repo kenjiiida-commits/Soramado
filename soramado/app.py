@@ -21,6 +21,7 @@ from .view import SpaceView, format_length
 from . import galaxies as gx
 from . import smallbodies as sbs
 from . import tours
+from . import cosmos
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -145,6 +146,8 @@ class MainWindow(QMainWindow):
         for g in gx.GALAXIES:
             if g.in_menu:
                 self.cb_target.addItem(g.name, g.key)
+        self.cb_target.insertSeparator(self.cb_target.count())
+        self.cb_target.addItem("観測できる宇宙の果て", "u:cmb")
         self.cb_target.setMaxVisibleItems(30)
         self.cb_target.activated.connect(lambda i: self.view.set_target(self.cb_target.itemData(i)))
         tb.addWidget(self.cb_target)
@@ -236,6 +239,9 @@ class MainWindow(QMainWindow):
         act_dl = QAction("惑星の画像をダウンロード…", self)
         act_dl.triggered.connect(lambda: self._start_download(force=True))
         m_file.addAction(act_dl)
+        act_q = QAction("クエーサーのデータをダウンロード…", self)
+        act_q.triggered.connect(self._download_quasars)
+        m_file.addAction(act_q)
         m_file.addSeparator()
         act_quit = QAction("終了", self)
         act_quit.setShortcut(QKeySequence.Quit)
@@ -256,6 +262,8 @@ class MainWindow(QMainWindow):
         self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
         self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
         self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
+        self.act_qso = self._toggle(m_view, "クエーサー", "show_quasars")
+        self.act_cmb = self._toggle(m_view, "宇宙マイクロ波背景放射", "show_cmb")
         m_view.addSeparator()
         act_full = QAction("全画面表示", self, checkable=True)
         act_full.setShortcut(QKeySequence("F11"))
@@ -285,6 +293,44 @@ class MainWindow(QMainWindow):
         m_help.addAction(act_about)
 
     # ---------------------------------------------------------- 動作
+
+    # ---------------------------------------------------------- クエーサーのダウンロード
+
+    def _download_quasars(self):
+        if getattr(self, "_qso_dl", None):
+            return
+        ans = QMessageBox.question(
+            self, "クエーサーのデータ",
+            "SDSS の第16次クエーサーカタログ（DR16Q、約75万個）を、天文データセンター VizieR から"
+            "ダウンロードします（通信量 約20〜40MB、数分かかることがあります）。よろしいですか？")
+        if ans != QMessageBox.Yes:
+            return
+        dl = cosmos.QuasarDownloader()
+        dlg = QProgressDialog("クエーサーのデータをダウンロードしています…", "キャンセル", 0, 0, self)
+        dlg.setWindowTitle("クエーサーのデータ")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.canceled.connect(dl.cancel)
+        timer = QTimer(self)
+
+        def poll():
+            dlg.setLabelText(f"クエーサーのデータをダウンロードしています…\n{dl.bytes / 1e6:,.1f} MB")
+            if not dl.done:
+                return
+            timer.stop()
+            dlg.close()
+            self._qso_dl = None
+            if dl.ok:
+                self.view.reload_quasars()
+                QMessageBox.information(self, "クエーサーのデータ", f"{dl.count:,} 個のクエーサーを読み込みました。\n"
+                                        "数億光年より遠くまで引くと見えます。")
+            else:
+                QMessageBox.warning(self, "クエーサーのデータ", "ダウンロードできませんでした。\n\n" + dl.message)
+
+        timer.timeout.connect(poll)
+        self._qso_dl = (dl, timer, dlg)
+        dl.start()
+        timer.start(200)
 
     # ---------------------------------------------------------- 解説パネル
 
@@ -325,6 +371,10 @@ class MainWindow(QMainWindow):
                 html.append(f"<h2>{v.gcat.label(i)}</h2>")
                 html.append("<p>" + v.gcat.describe(i).replace("　｜　", "<br>") + "</p>")
                 html.append(f"<p>{KIND_DESCRIPTIONS.get(int(v.gcat.kind[i]), '')}</p>")
+            elif t == "u:cmb":
+                html.append("<h2>観測できる宇宙の果て</h2>")
+                html.append(f"<p>{text_for('u:cmb')}</p>")
+                html.append("<p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
             else:
                 name = gx.BY_KEY[t].name if t in gx.BY_KEY else BY_KEY[t].name
                 html.append(f"<h2>{name}</h2>")
@@ -555,6 +605,13 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         key = v.target
+        if key == "u:cmb":
+            q = f"クエーサー {v.qso_count:,} 個を表示中" if v.qso_count else "クエーサーのデータは未ダウンロード（ファイルメニュー）"
+            self.status_info.setText("<b>観測できる宇宙の果て</b>　｜　宇宙マイクロ波背景放射まで 約"
+                                     f"{cosmos.CMB_MPC * 3.26156e6 / 1e8:,.0f} 億光年（共動距離）　｜　{q}"
+                                     "　｜　視点の距離 " + format_length(v.dist))
+            self._refresh_warn(v)
+            return
         if v.ground:
             parts = [f"<b>地上から見た空</b>（{v.place}　北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）"]
             sun_alt, _ = v.ground_altaz("sun")
@@ -696,6 +753,8 @@ class MainWindow(QMainWindow):
             "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"
             "・銀河: 位置・距離・大きさは文献のおおよその値。形は粒子で作った模式図<br>"
             "・銀河カタログ（約1万個）: OpenNGC（CC BY-SA 4.0）。距離は後退速度から推定<br>"
+            "・クエーサー（ダウンロードした場合）: SDSS DR16Q（Lyke et al. 2020）、VizieR VII/289<br>"
+            "・宇宙マイクロ波背景放射: 計算で作った模式図（本物の観測地図ではありません）<br>"
             "・惑星の画像（ダウンロードした場合）: "
             "<a href='https://www.solarsystemscope.com/textures/'>Solar System Scope</a>"
             "（CC BY 4.0）</p>"
