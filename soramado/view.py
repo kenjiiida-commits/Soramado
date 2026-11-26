@@ -314,6 +314,7 @@ class SpaceView(QOpenGLWidget):
         self._lift = None            # 地上と宇宙のあいだを飛んでいる途中の情報
         self._lift_cam = None        # 飛んでいる途中のカメラ（位置・前・上）
         self._air = 1.0              # 空気の濃さ（1 = 地上、0 = 宇宙）
+        self._lift_done_at = -1e9    # 最後に着いた時刻
         self.show_lift = True        # 地上と宇宙を行き来するとき、飛ぶ様子を見せる
 
         # カメラ（注視点のまわりを回る）
@@ -562,6 +563,7 @@ class SpaceView(QOpenGLWidget):
         self._lift_cam = None
         self._air = 1.0
         self._fly = None
+        self._lift_done_at = self.now()      # 着いてから、軌道の線をゆっくり出す
         if L["up"]:
             _off, zen, _n, _e = astro.observer_frame(self.jd, self.lat, self.lon)
             self.ground = False
@@ -956,7 +958,8 @@ class SpaceView(QOpenGLWidget):
         if self.recording and self._on_frame:
             # 1コマずつ確実に描いて、録画に渡す
             self._on_frame(self.grabFramebuffer())
-        elif not self.paused or self._fly or self._lift or self._idle_frames < 2 or self._meteor_live:
+        elif (not self.paused or self._fly or self._lift or self._idle_frames < 2 or self._meteor_live
+              or getattr(self, "_line_fading", False)):
             QOpenGLWidget.update(self)
             self._idle_frames = 0 if (not self.paused or self._fly or self._lift) else self._idle_frames + 1
         # 時間が止まっていて何も動いていないときは描き直さない（パソコンの負担を減らす）
@@ -2129,6 +2132,10 @@ class SpaceView(QOpenGLWidget):
             self.m_ring.draw(f)
             p.release()
 
+        # 宇宙に着いてから約3秒かけて、軌道・航路の線をふわっと出す
+        line_fade = 0.0 if self._lift_cam is not None else _smooth(0.3, 3.3, self.now() - self._lift_done_at)
+        self._line_fading = line_fade < 1.0
+
         # ---- 軌道
         if self.show_orbits and sun_far < 2e5 and not self.ground and self._lift_cam is None:
             p = self.p_line
@@ -2171,6 +2178,7 @@ class SpaceView(QOpenGLWidget):
                 for k2 in ((key,) if key != "earth" else ("earth", "moon")):
                     near = np.linalg.norm(rel[k2]) / (self.display_radius(k2) * 300.0)
                     alpha *= min(1.0, near * near)
+                alpha *= line_fade
                 if alpha < 0.01:
                     continue
                 p.setUniformValue("u_offset", QVector3D(*offset))
@@ -2194,7 +2202,7 @@ class SpaceView(QOpenGLWidget):
                 t0, t1 = crafts.span(sc)
                 if sc.key != self.target and not (t0 <= self.jd <= t1):
                     continue
-                alpha = 0.95 if sc.key == self.target else (0.35 if crafts.BY_KEY.get(self.target) else 0.5)
+                alpha = (0.95 if sc.key == self.target else (0.35 if crafts.BY_KEY.get(self.target) else 0.5)) * line_fade
                 p.setUniformValue("u_color", QVector4D(*sc.color, alpha))
                 self.m_craft[sc.key].draw(f)
             p.release()
