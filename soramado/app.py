@@ -38,8 +38,12 @@ PLACES = [
     ("広島", 34.39, 132.46), ("福岡", 33.59, 130.40), ("那覇", 26.21, 127.68),
 ]
 
-TARGET_ORDER = ["sun", "mercury", "venus", "earth", "moon", "mars",
-                "jupiter", "saturn", "uranus", "neptune"]
+TARGET_ORDER = ["sun", "mercury", "venus", "earth", "moon",
+                "mars", "phobos", "deimos",
+                "jupiter", "io", "europa", "ganymede", "callisto",
+                "saturn", "mimas", "enceladus", "tethys", "dione", "rhea", "titan", "iapetus",
+                "uranus", "miranda", "ariel", "umbriel", "titania", "oberon",
+                "neptune", "triton"]
 
 HELP_TEXT = """<h3>操作方法</h3>
 <table cellpadding="3">
@@ -108,7 +112,9 @@ class MainWindow(QMainWindow):
         tb.addWidget(QLabel(" 見る天体 "))
         self.cb_target = QComboBox()
         for key in TARGET_ORDER:
-            self.cb_target.addItem(BY_KEY[key].name, key)
+            par = BY_KEY[key].parent
+            # 衛星は字下げして、どの惑星の衛星か分かるようにする
+            self.cb_target.addItem(("　" + BY_KEY[key].name) if par not in ("sun", "") else BY_KEY[key].name, key)
         self.cb_target.insertSeparator(self.cb_target.count())
         for g in gx.GALAXIES:
             if g.in_menu:
@@ -401,6 +407,10 @@ class MainWindow(QMainWindow):
             return
         b = BY_KEY[key]
         parts = [f"<b>{b.name}</b>", f"半径 {b.radius_km:,.0f} km"]
+        if b.parent not in ("sun", ""):
+            par = BY_KEY[b.parent]
+            d = np.linalg.norm(v.positions[key] - v.positions[b.parent]) * astro.AU_KM
+            parts.append(f"{par.name}の衛星（{par.name}から {d / 1e4:,.1f} 万km）")
         if key != "sun":
             parts.append(f"太陽から {_fmt_dist(np.linalg.norm(v.positions[key])):s}")
         if key not in ("earth", "sun"):
@@ -489,6 +499,7 @@ class MainWindow(QMainWindow):
             "<p><b>使用しているデータ</b><br>"
             "・惑星の軌道: NASA JPL「Approximate Positions of the Planets」<br>"
             "・月の位置: Paul Schlyter「How to compute planetary positions」<br>"
+            "・衛星の位置: PyEphem（トリトンは NASA JPL の平均軌道要素）<br>"
             "・天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）<br>"
             "・恒星: HYG データベース v4.1（CC BY-SA 4.0）<br>"
             "・星座線・星座名: d3-celestial（© Olaf Frohn, BSD 3-Clause）<br>"

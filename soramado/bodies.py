@@ -50,6 +50,18 @@ BODIES = [
          "neptune", texture="2k_neptune.jpg"),
 ]
 
+def _add_satellites():
+    from .satellites import SATELLITES
+    parents = {b.key: b for b in BODIES}
+    for sat in SATELLITES:
+        par = parents[sat.parent]
+        # 衛星は惑星と同じ向きの軸で、公転と同じ周期で自転する（いつも同じ面を惑星に向ける）
+        BODIES.append(Body(sat.key, sat.name, sat.radius_km, sat.color, par.pole_ra, par.pole_dec,
+                           0.0, 360.0 / sat.period, "sat", parent=sat.parent))
+
+
+_add_satellites()
+
 BY_KEY = {b.key: b for b in BODIES}
 
 # 画像ファイルの入手先（Solar System Scope、CC BY 4.0）

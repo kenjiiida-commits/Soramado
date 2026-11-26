@@ -106,6 +106,28 @@ def procedural(key: str, w: int = 512, h: int = 256) -> QImage:
         rgb = _mix((0.55, 0.82, 0.86), (0.66, 0.90, 0.92), 0.5 + 0.5 * np.sin(lat * 4))
     elif key == "neptune":
         rgb = _mix((0.18, 0.32, 0.80), (0.35, 0.52, 0.95), 0.5 + 0.5 * np.sin(lat * 7 + n * 2))
+    elif key == "io":
+        rgb = _mix((0.85, 0.70, 0.25), (0.98, 0.92, 0.55), n)
+        spots = _noise(w, h, 31, 3, 24) > 0.72
+        rgb[spots] = (0.45, 0.22, 0.10)
+    elif key == "europa":
+        rgb = _mix((0.78, 0.70, 0.58), (0.95, 0.93, 0.88), n)
+        lines = np.abs(np.sin(_noise(w, h, 41, 3, 6) * 40)) < 0.08
+        rgb[lines] = (0.60, 0.42, 0.30)
+    elif key == "titan":
+        rgb = _mix((0.80, 0.52, 0.18), (0.95, 0.72, 0.35), 0.5 + 0.5 * np.sin(lat * 3 + n))
+    elif key == "enceladus":
+        rgb = _mix((0.88, 0.92, 0.96), (1.0, 1.0, 1.0), n)
+    elif key == "iapetus":
+        # 前側（公転の進行方向）が暗い二色の衛星
+        lon = np.repeat(np.linspace(-1, 1, w)[None, :], h, axis=0)
+        dark = np.clip((0.4 - np.hypot(lon - 0.5, lat * 0.8)) * 6, 0, 1)
+        rgb = _mix(_mix((0.75, 0.72, 0.66), (0.88, 0.86, 0.80), n), (0.18, 0.12, 0.08), dark)
+    elif key in ("ganymede", "callisto", "phobos", "deimos", "triton", "mimas", "tethys", "dione", "rhea",
+                 "miranda", "ariel", "umbriel", "titania", "oberon"):
+        from .satellites import BY_KEY as SAT
+        c = np.array(SAT[key].color)
+        rgb = _mix(c * 0.6, np.minimum(c * 1.15, 1.0), n)
     else:
         rgb = np.full((h, w, 3), 0.6)
     return _to_image(rgb)

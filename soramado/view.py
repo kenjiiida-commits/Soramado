@@ -16,6 +16,7 @@ from . import astro, shaders, textures
 from .stars import StarCatalog
 from . import galaxies as gx
 from .galaxy_catalog import GalaxyCatalog
+from . import satellites as sats
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -227,7 +228,7 @@ class SpaceView(QOpenGLWidget):
         self._fly = None          # 移動中の情報
         self._drag = None
 
-        self.positions = astro.all_positions(self.jd)
+        self.positions = sats.add_positions(astro.all_positions(self.jd), self.jd)
         self._orbit_jd = None
         self._screen = {}         # 天体の画面上の位置（ラベル・選択用）
 
@@ -368,18 +369,29 @@ class SpaceView(QOpenGLWidget):
         m = min(self.magnify, 10.0) if key == "sun" else self.magnify
         return b.radius_km * KM * m
 
+    _INNER_KM = {"earth": 384400.0}
+
+    def sat_scale(self, parent: str) -> float:
+        """拡大表示のとき、衛星が惑星に埋もれないように衛星の軌道も広げる倍率。"""
+        if self.magnify <= 1.0:
+            return 1.0
+        inner = self._INNER_KM.get(parent)
+        if inner is None:
+            inner = min(s.a_km for s in sats.BY_PARENT[parent])
+        return max(1.0, self.magnify * BY_KEY[parent].radius_km / (inner * 0.75))
+
     def moon_scale(self) -> float:
-        """拡大表示のとき、月が地球に埋もれないように月の軌道も広げる。"""
-        return max(1.0, self.magnify / 30.0)
+        return self.sat_scale("earth")
 
     def display_pos(self, key: str) -> np.ndarray:
         if key.startswith("c:"):
             return self.gcat.center[int(key[2:])]
         if key in gx.BY_KEY:
             return gx.BY_KEY[key].center
-        if key == "moon":
-            e = self.positions["earth"]
-            return e + (self.positions["moon"] - e) * self.moon_scale()
+        par = BY_KEY[key].parent if key in BY_KEY else ""
+        if par and par != "sun":
+            e = self.positions[par]
+            return e + (self.positions[key] - e) * self.sat_scale(par)
         return self.positions[key]
 
     def _min_dist(self, key):
@@ -437,8 +449,8 @@ class SpaceView(QOpenGLWidget):
         self.update()
 
     def _refresh_positions(self):
-        self.positions = astro.all_positions(self.jd)
-        if self._orbit_jd is None or abs(self.jd - self._orbit_jd) > 3650:
+        self.positions = sats.add_positions(astro.all_positions(self.jd), self.jd)
+        if self._orbit_jd is None or abs(self.jd - self._orbit_jd) > 30:
             self._orbit_dirty = True
 
     # ---------------------------------------------------------- OpenGL
@@ -536,8 +548,20 @@ class SpaceView(QOpenGLWidget):
             else:
                 self.m_orbits[key] = _Mesh(pts, [(0, 3)], GL_LINE_STRIP)
         self._rebuild_moon_orbit()
+        if not hasattr(self, "_sat_orbit_jd"):
+            self._rebuild_sat_orbits()
         self._orbit_jd = self.jd
         self._orbit_dirty = False
+
+    def _rebuild_sat_orbits(self):
+        """衛星の軌道線。計算に時間がかかるので、必要なときだけ作り直す。"""
+        for key, pts in sats.orbit_paths(self.jd, 120).items():
+            if key in self.m_orbits:
+                self.m_orbits[key].update(pts)
+            else:
+                self.m_orbits[key] = _Mesh(pts, [(0, 3)], GL_LINE_STRIP)
+        self._sat_orbit_jd = self.jd
+        self._sat_orbit_at = time.monotonic()
 
     def _rebuild_moon_orbit(self):
         """月の軌道（地球中心、約27.3日で1周）。摂動で形が変わるので時々作り直す。"""
@@ -689,7 +713,8 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue("u_right", QVector3D(*right))
             p.setUniformValue("u_up", QVector3D(*up))
             p.setUniformValue1f("u_focal", float(focal))
-            p.setUniformValue1f("u_gain", 0.7)
+            # 太陽系の中から見るときは、遠くの銀河は暗すぎて見えないので出さない
+            p.setUniformValue1f("u_gain", float(0.7 * _smooth(30 * LY_AU, 3000 * LY_AU, sun_far)))
             self.m_gcat.draw(f)
             p.release()
         if self.show_con_lines and self._con_fade > 0.01:
@@ -800,12 +825,23 @@ class SpaceView(QOpenGLWidget):
                     if (abs(self.jd - self._moon_orbit_jd) > 1.0
                             and time.monotonic() - self._moon_orbit_at > 0.2):
                         self._rebuild_moon_orbit()
+                elif key in sats.BY_KEY:
+                    st = sats.BY_KEY[key]
+                    scale = self.sat_scale(st.parent)
+                    offset = rel[st.parent]
+                    # 惑星から遠いときは衛星の軌道を描かない（惑星の点に重なるだけなので）
+                    if np.linalg.norm(offset) > st.a_km / astro.AU_KM * scale * 250:
+                        continue
+                    # 衛星の軌道は少しずつ変わるので、見えているときだけ時々作り直す
+                    if (abs(self.jd - self._sat_orbit_jd) > 20
+                            and time.monotonic() - self._sat_orbit_at > 2.0):
+                        self._rebuild_sat_orbits()
                 else:
                     offset, scale = sun_rel, 1.0
-                alpha = 0.8 if key == self.target else 0.5
+                alpha = 0.8 if key == self.target else (0.35 if key in sats.BY_KEY else 0.5)
                 # 天体のすぐ近くでは、その天体の軌道線が手前を横切って邪魔なので薄くする
                 for k2 in ((key,) if key != "earth" else ("earth", "moon")):
-                    near = np.linalg.norm(rel[k2]) / (self.display_radius(k2) * 60.0)
+                    near = np.linalg.norm(rel[k2]) / (self.display_radius(k2) * 300.0)
                     alpha *= min(1.0, near * near)
                 if alpha < 0.01:
                     continue
@@ -886,10 +922,10 @@ class SpaceView(QOpenGLWidget):
                 continue
             col = QColor.fromRgbF(*b.color)
             if rad_px < 2.5 and b.key != "sun":
-                # 小さすぎて見えない天体は点で示す。月は地球に重なるときは省く
-                if b.key == "moon" and "earth" in self._screen:
-                    ex, ey, _ = self._screen["earth"]
-                    if math.hypot(ex - x, ey - y) < 4:
+                # 小さすぎて見えない天体は点で示す。衛星が惑星に重なるときは省く
+                if b.parent not in ("sun", "") and b.parent in self._screen:
+                    ex, ey, er = self._screen[b.parent]
+                    if math.hypot(ex - x, ey - y) < max(4.0, er):
                         continue
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(col)
@@ -946,7 +982,7 @@ class SpaceView(QOpenGLWidget):
         painter.setFont(font)
 
     def _draw_galaxy_labels(self, painter, viewproj, w, h, placed, fm, focal):
-        if not self.show_galaxies:
+        if not self.show_galaxies or self._sun_far < 30 * LY_AU:
             return
         eye = self._eye
         self._draw_catalog_labels(painter, viewproj, w, h, placed, fm, focal)
@@ -1023,7 +1059,7 @@ class SpaceView(QOpenGLWidget):
             dirs = ["北", "北北東", "北東", "東北東", "東", "東南東", "南東", "南南東",
                     "南", "南南西", "南西", "西南西", "西", "西北西", "北西", "北北西"]
             txt = (f"{self.place}　見ている方向: {dirs[int((az + 11.25) // 22.5) % 16]}"
-                   f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.0f}°")
+                   f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.2g}°")
             painter.setPen(QPen(QColor(200, 205, 215)))
             painter.drawText(QPointF(12, h - 12), txt)
             return
@@ -1141,7 +1177,7 @@ class SpaceView(QOpenGLWidget):
                 self.g_az = az0 - d.x() * k
                 self.g_alt = max(math.radians(-20), min(math.radians(90), alt0 + d.y() * k))
             else:
-                self.g_fov = max(1.0, min(120.0, fov0 * math.exp(d.y() * 0.01)))
+                self.g_fov = max(0.1, min(120.0, fov0 * math.exp(d.y() * 0.01)))
             self.update()
             return
         if button == Qt.LeftButton:
@@ -1158,7 +1194,7 @@ class SpaceView(QOpenGLWidget):
     def wheelEvent(self, e):
         steps = e.angleDelta().y() / 120.0
         if self.ground:
-            self.g_fov = max(1.0, min(120.0, self.g_fov * (0.88 ** steps)))
+            self.g_fov = max(0.1, min(120.0, self.g_fov * (0.88 ** steps)))
             self.update()
             return
         if self._fly:
@@ -1197,7 +1233,7 @@ class SpaceView(QOpenGLWidget):
             self.paused = not self.paused
             self.statusChanged.emit("")
         elif self.ground and k in (Qt.Key_Plus, Qt.Key_Equal, Qt.Key_Minus):
-            self.g_fov = max(1.0, min(120.0, self.g_fov * (0.8 if k != Qt.Key_Minus else 1.25)))
+            self.g_fov = max(0.1, min(120.0, self.g_fov * (0.8 if k != Qt.Key_Minus else 1.25)))
         elif k in (Qt.Key_Plus, Qt.Key_Equal):
             self.dist = max(self._min_dist(self.target), self.dist * 0.8)
         elif k == Qt.Key_Minus:

@@ -31,7 +31,7 @@ Version: $VERSION
 Section: science
 Priority: optional
 Architecture: all
-Depends: python3 (>= 3.10), python3-numpy, python3-pyside6.qtcore, python3-pyside6.qtgui, python3-pyside6.qtwidgets, python3-pyside6.qtopengl, python3-pyside6.qtopenglwidgets
+Depends: python3 (>= 3.10), python3-numpy, python3-ephem, python3-pyside6.qtcore, python3-pyside6.qtgui, python3-pyside6.qtwidgets, python3-pyside6.qtopengl, python3-pyside6.qtopenglwidgets
 Maintainer: Kenji Iida <kenjiiida-commits@users.noreply.github.com>
 Homepage: https://github.com/kenjiiida-commits/Soramado
 Description: Space simulator for Ubuntu (Soramado)
