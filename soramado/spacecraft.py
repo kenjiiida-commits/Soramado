@@ -302,3 +302,13 @@ def path(sc: Spacecraft, until: float | None = None, per_leg: int = 300) -> np.n
 def last_event(sc: Spacecraft, jd: float) -> str:
     done = [txt for t, txt in sc.events if t <= jd]
     return done[-1] if done else "打ち上げ前"
+
+
+def _english_names():
+    from .i18n import EN_MODE, name_en
+    if EN_MODE:
+        for x in SPACECRAFT:
+            object.__setattr__(x, "name", name_en(x.key, x.name))
+
+
+_english_names()

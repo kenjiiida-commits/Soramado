@@ -138,8 +138,21 @@ def main(paths):
             typ = "emn"
         maj = float(r["MajAx"] or 0) or {"ocl": 10, "gcl": 8, "pn": 1, "emn": 20, "rfn": 5, "snr": 10}[typ]
         mnr = float(r["MinAx"] or 0) or maj
+        common = (r.get("Common names") or "").split(",")[0].strip()
+        label = f"M{int(r['M'])}" if r["M"] else (name[:3] + " " + name[3:].lstrip("0") if name[:3] in ("NGC", "IC0") else name)
+        label = label.replace("IC0 ", "IC ").replace("IC0", "IC ")
+        if name == "C041":
+            common, label = "Hyades", "Mel 25"
+        if name == "Mel022":
+            common = "Pleiades"
+        common = {"NGC6705": "Wild Duck Cluster", "NGC6618": "Omega Nebula", "NGC1976": "Orion Nebula",
+                  "NGC0869": "Double Cluster (h Per)", "NGC0884": "Double Cluster (χ Per)",
+                  "NGC5139": "Omega Centauri", "NGC0104": "47 Tucanae", "NGC3372": "Carina Nebula",
+                  "IC0434": "Horsehead Nebula region", "NGC6960": "Veil Nebula (west)",
+                  "NGC6992": "Veil Nebula (east)"}.get(name, common)
+        name_en = f"{common} ({label})" if common else label
         out.append({
-            "id": name, "name": ja, "m": int(r["M"]) if r["M"] else 0, "type": typ,
+            "id": name, "name": ja, "name_en": name_en, "m": int(r["M"]) if r["M"] else 0, "type": typ,
             "ra": round(hms(r["RA"], True), 5), "dec": round(hms(r["Dec"], False), 5),
             "maj": maj, "min": mnr, "pa": float(r["PosAng"] or 0),
             "vmag": float(r["V-Mag"] or r["B-Mag"] or 0) or None, "ly": ly, "note": note,

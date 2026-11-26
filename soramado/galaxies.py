@@ -277,3 +277,13 @@ def describe(g: Galaxy) -> str:
     parts.append(f"直径 約{ly(g.radius_kpc * 2)}")
     parts.append("※ 形は模式図")
     return "　｜　".join(parts)
+
+
+def _english_names():
+    from .i18n import EN_MODE, name_en
+    if EN_MODE:
+        for x in GALAXIES:
+            object.__setattr__(x, "name", name_en(x.key, x.name))
+
+
+_english_names()

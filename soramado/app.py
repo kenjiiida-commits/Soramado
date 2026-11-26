@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDi
                                QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView)
 
 from . import __version__, astro, textures
+from .i18n import EN_MODE, tr, trx
 from .bodies import BY_KEY
 from .view import SpaceView, format_length
 from . import galaxies as gx
@@ -34,22 +35,22 @@ from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
-    ("実時間", 1.0),
-    ("1分/秒", 60.0),
-    ("10分/秒", 600.0),
-    ("1時間/秒", 3600.0),
-    ("6時間/秒", 21600.0),
-    ("1日/秒", 86400.0),
-    ("1週間/秒", 604800.0),
-    ("1か月/秒", 2629800.0),
-    ("1年/秒", 31557600.0),
+    (tr("実時間"), 1.0),
+    (tr("1分/秒"), 60.0),
+    (tr("10分/秒"), 600.0),
+    (tr("1時間/秒"), 3600.0),
+    (tr("6時間/秒"), 21600.0),
+    (tr("1日/秒"), 86400.0),
+    (tr("1週間/秒"), 604800.0),
+    (tr("1か月/秒"), 2629800.0),
+    (tr("1年/秒"), 31557600.0),
 ]
 DEFAULT_SPEED = 5   # 1日/秒
 
 PLACES = [
-    ("札幌", 43.06, 141.35), ("仙台", 38.27, 140.87), ("東京", 35.68, 139.77),
-    ("三鷹（国立天文台）", 35.67, 139.54), ("名古屋", 35.18, 136.91), ("大阪", 34.69, 135.50),
-    ("広島", 34.39, 132.46), ("福岡", 33.59, 130.40), ("那覇", 26.21, 127.68),
+    (tr("札幌"), 43.06, 141.35), (tr("仙台"), 38.27, 140.87), (tr("東京"), 35.68, 139.77),
+    (tr("三鷹（国立天文台）"), 35.67, 139.54), (tr("名古屋"), 35.18, 136.91), (tr("大阪"), 34.69, 135.50),
+    (tr("広島"), 34.39, 132.46), (tr("福岡"), 33.59, 130.40), (tr("那覇"), 26.21, 127.68),
 ]
 
 def _target_order():
@@ -66,7 +67,7 @@ TARGET_ORDER = _target_order()
 SMALL_ORDER = ["pluto", "eris", "makemake", "haumea", "ceres", "pallas", "vesta",
                "itokawa", "ryugu", "bennu", "halley", "encke", "67p"]
 
-HELP_TEXT = """<h3>操作方法</h3>
+HELP_TEXT = tr("""<h3>操作方法</h3>
 <table cellpadding="3">
 <tr><td><b>左ドラッグ</b></td><td>視点を回す</td></tr>
 <tr><td><b>ホイール</b> / <b>右ドラッグ</b></td><td>近づく・離れる</td></tr>
@@ -94,7 +95,7 @@ HELP_TEXT = """<h3>操作方法</h3>
 実寸（×1）では、遠くから見ると惑星は点と名前だけになります。</p>
 <p>「星の数」で、何等星まで表示するかを変えられます。肉眼で見えるのは 6.5 等くらいまでです。</p>
 <p>ホイールでどこまでも引いていくと、近くの恒星 → 天の川銀河 → 近くの銀河 と、宇宙の大きさを旅できます。
-「見る天体」から銀河を選ぶと、その銀河まで飛んでいきます。銀河の形は模式図です。</p>"""
+「見る天体」から銀河を選ぶと、その銀河まで飛んでいきます。銀河の形は模式図です。</p>""")
 
 
 def _fmt_dist(au: float) -> str:
@@ -106,7 +107,7 @@ def _fmt_dist(au: float) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"そらみ窓 {__version__}")
+        self.setWindowTitle(f"{tr('そらみ窓')} {__version__}")
         self.resize(1280, 800)
         self.settings = QSettings("Soramado", "Soramado")
 
@@ -154,12 +155,12 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 画面の部品
 
     def _build_toolbar(self):
-        tb = QToolBar("操作")
+        tb = QToolBar(tr("操作"))
         tb.setObjectName("toolbar")
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        tb.addWidget(QLabel(" 見る天体 "))
+        tb.addWidget(QLabel(tr(" 見る天体 ")))
         self.cb_target = QComboBox()
         for key in TARGET_ORDER:
             par = BY_KEY[key].parent
@@ -182,41 +183,41 @@ class MainWindow(QMainWindow):
             if g.in_menu:
                 self.cb_target.addItem(g.name, g.key)
         self.cb_target.insertSeparator(self.cb_target.count())
-        self.cb_target.addItem("観測できる宇宙の果て", "u:cmb")
+        self.cb_target.addItem(tr("観測できる宇宙の果て"), "u:cmb")
         self.cb_target.setMaxVisibleItems(30)
         self.cb_target.activated.connect(lambda i: self.view.set_target(self.cb_target.itemData(i)))
         tb.addWidget(self.cb_target)
 
-        self.btn_all = QPushButton("全体を見る")
+        self.btn_all = QPushButton(tr("全体を見る"))
         self.btn_all.clicked.connect(self.view.overview)
         tb.addWidget(self.btn_all)
         tb.addSeparator()
 
-        self.btn_ground = QPushButton("🔭 地上から見る")
+        self.btn_ground = QPushButton(tr("🔭 地上から見る"))
         self.btn_ground.setCheckable(True)
         self.btn_ground.toggled.connect(self._on_ground)
         tb.addWidget(self.btn_ground)
         self.cb_place = QComboBox()
         for name, lat, lon in PLACES:
             self.cb_place.addItem(name, (name, lat, lon))
-        self.cb_place.addItem("緯度・経度を入力…", None)
+        self.cb_place.addItem(tr("緯度・経度を入力…"), None)
         self.cb_place.activated.connect(self._on_place)
         tb.addWidget(self.cb_place)
         tb.addSeparator()
 
-        self.btn_rec = QPushButton("⏺ 録画")
+        self.btn_rec = QPushButton(tr("⏺ 録画"))
         self.btn_rec.setCheckable(True)
-        self.btn_rec.setToolTip("画面を動画（MP4）に録画します")
+        self.btn_rec.setToolTip(tr("画面を動画（MP4）に録画します"))
         self.btn_rec.toggled.connect(self._on_record)
         tb.addWidget(self.btn_rec)
         tb.addSeparator()
 
-        self.btn_play = QPushButton("⏸ 停止")
+        self.btn_play = QPushButton(tr("⏸ 停止"))
         self.btn_play.setMinimumWidth(80)
         self.btn_play.clicked.connect(self._toggle_pause)
         tb.addWidget(self.btn_play)
 
-        self.chk_reverse = QCheckBox("逆再生")
+        self.chk_reverse = QCheckBox(tr("逆再生"))
         self.chk_reverse.toggled.connect(self._apply_speed)
         tb.addWidget(self.chk_reverse)
 
@@ -227,7 +228,7 @@ class MainWindow(QMainWindow):
         self.cb_speed.currentIndexChanged.connect(self._apply_speed)
         tb.addWidget(self.cb_speed)
 
-        btn_now = QPushButton("現在時刻")
+        btn_now = QPushButton(tr("現在時刻"))
         btn_now.clicked.connect(lambda: self.view.set_jd(astro.jd_now()))
         tb.addWidget(btn_now)
 
@@ -244,13 +245,13 @@ class MainWindow(QMainWindow):
         box = QWidget()
         lay = QHBoxLayout(box)
         lay.setContentsMargins(6, 0, 6, 0)
-        lay.addWidget(QLabel("惑星の大きさ"))
+        lay.addWidget(QLabel(tr("惑星の大きさ")))
         self.sl_mag = QSlider(Qt.Horizontal)
         self.sl_mag.setRange(0, 300)          # 10^(値/100) 倍
         self.sl_mag.setFixedWidth(140)
         self.sl_mag.valueChanged.connect(self._on_magnify)
         lay.addWidget(self.sl_mag)
-        self.lb_mag = QLabel("×1（実寸）")
+        self.lb_mag = QLabel(tr("×1（実寸）"))
         self.lb_mag.setMinimumWidth(80)
         lay.addWidget(self.lb_mag)
         tb.addWidget(box)
@@ -258,7 +259,7 @@ class MainWindow(QMainWindow):
         box2 = QWidget()
         lay2 = QHBoxLayout(box2)
         lay2.setContentsMargins(6, 0, 6, 0)
-        lay2.addWidget(QLabel("星の数"))
+        lay2.addWidget(QLabel(tr("星の数")))
         self.sl_stars = QSlider(Qt.Horizontal)
         self.sl_stars.setRange(20, 100)        # 限界等級 ×10（2.0〜10.0等）
         self.sl_stars.setValue(65)
@@ -277,123 +278,133 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self):
         mb = self.menuBar()
-        m_file = mb.addMenu("ファイル(&F)")
-        act_dl = QAction("惑星の画像をダウンロード…", self)
+        m_file = mb.addMenu(tr("ファイル(&F)"))
+        act_dl = QAction(tr("惑星の画像をダウンロード…"), self)
         act_dl.triggered.connect(lambda: self._start_download(force=True))
         m_file.addAction(act_dl)
-        act_shot = QAction("画面を画像で保存", self)
+        act_shot = QAction(tr("画面を画像で保存"), self)
         act_shot.setShortcut(QKeySequence("Ctrl+S"))
         act_shot.triggered.connect(self.save_picture)
         m_file.insertAction(m_file.actions()[0] if m_file.actions() else None, act_shot)
-        act_rec = QAction("録画の開始・停止", self)
+        act_rec = QAction(tr("録画の開始・停止"), self)
         act_rec.setShortcut(QKeySequence("Ctrl+R"))
         act_rec.triggered.connect(lambda: self.btn_rec.toggle())
         m_file.insertAction(m_file.actions()[1], act_rec)
-        act_open = QAction("保存したフォルダを開く", self)
+        act_open = QAction(tr("保存したフォルダを開く"), self)
         act_open.triggered.connect(self._open_folders)
         m_file.insertAction(m_file.actions()[2], act_open)
         m_file.insertSeparator(m_file.actions()[3])
-        act_q = QAction("クエーサーのデータをダウンロード…", self)
+        act_q = QAction(tr("クエーサーのデータをダウンロード…"), self)
         act_q.triggered.connect(self._download_quasars)
         m_file.addAction(act_q)
-        act_mp = QAction("小惑星・彗星のデータをダウンロード…", self)
+        act_mp = QAction(tr("小惑星・彗星のデータをダウンロード…"), self)
         act_mp.triggered.connect(lambda: self._download_minor(None))
         m_file.addAction(act_mp)
-        act_mpf = QAction("小惑星・彗星のデータを手元のファイルから読み込む…", self)
+        act_mpf = QAction(tr("小惑星・彗星のデータを手元のファイルから読み込む…"), self)
         act_mpf.triggered.connect(self._load_minor_files)
         m_file.addAction(act_mpf)
-        act_tle = QAction("人工衛星のデータ（ISS など）をダウンロード…", self)
+        act_tle = QAction(tr("人工衛星のデータ（ISS など）をダウンロード…"), self)
         act_tle.triggered.connect(self._download_tle)
         m_file.addAction(act_tle)
-        act_exo = QAction("系外惑星のデータをダウンロード…", self)
+        act_exo = QAction(tr("系外惑星のデータをダウンロード…"), self)
         act_exo.triggered.connect(lambda: self._download_exo(None))
         m_file.addAction(act_exo)
-        act_exof = QAction("系外惑星のデータを手元のファイル（CSV）から読み込む…", self)
+        act_exof = QAction(tr("系外惑星のデータを手元のファイル（CSV）から読み込む…"), self)
         act_exof.triggered.connect(self._load_exo_file)
         m_file.addAction(act_exof)
         m_file.addSeparator()
-        act_quit = QAction("終了", self)
+        act_quit = QAction(tr("終了"), self)
         act_quit.setShortcut(QKeySequence.Quit)
         act_quit.triggered.connect(self.close)
         m_file.addAction(act_quit)
 
-        m_view = mb.addMenu("表示(&V)")
-        self.act_orbits = QAction("軌道", self, checkable=True, checked=True)
+        m_view = mb.addMenu(tr("表示(&V)"))
+        self.act_orbits = QAction(tr("軌道"), self, checkable=True, checked=True)
         self.act_orbits.toggled.connect(self._on_toggle_orbits)
         m_view.addAction(self.act_orbits)
-        self.act_labels = QAction("名前", self, checkable=True, checked=True)
+        self.act_labels = QAction(tr("名前"), self, checkable=True, checked=True)
         self.act_labels.toggled.connect(self._on_toggle_labels)
         m_view.addAction(self.act_labels)
         m_view.addSeparator()
-        self.act_stars = self._toggle(m_view, "恒星", "show_stars")
-        self.act_conl = self._toggle(m_view, "星座線", "show_con_lines")
-        self.act_conn = self._toggle(m_view, "星座名", "show_con_names")
-        self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
-        self.act_neb = self._toggle(m_view, "星雲・星団", "show_nebulae")
-        self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
-        self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
-        self.act_minor = self._toggle(m_view, "たくさんの小惑星・彗星（ダウンロードしたもの）", "show_minor")
-        self.act_exo = self._toggle(m_view, "系外惑星を持つ恒星（ダウンロードしたもの）", "show_exo")
-        act_find = QAction("天体を探す（星座・星雲・小惑星・系外惑星）…", self)
+        self.act_stars = self._toggle(m_view, tr("恒星"), "show_stars")
+        self.act_conl = self._toggle(m_view, tr("星座線"), "show_con_lines")
+        self.act_conn = self._toggle(m_view, tr("星座名"), "show_con_names")
+        self.act_starn = self._toggle(m_view, tr("星の名前"), "show_star_names")
+        self.act_neb = self._toggle(m_view, tr("星雲・星団"), "show_nebulae")
+        self.act_gal = self._toggle(m_view, tr("銀河"), "show_galaxies")
+        self.act_small = self._toggle(m_view, tr("準惑星・小惑星・彗星"), "show_small")
+        self.act_minor = self._toggle(m_view, tr("たくさんの小惑星・彗星（ダウンロードしたもの）"), "show_minor")
+        self.act_exo = self._toggle(m_view, tr("系外惑星を持つ恒星（ダウンロードしたもの）"), "show_exo")
+        act_find = QAction(tr("天体を探す（星座・星雲・小惑星・系外惑星）…"), self)
         act_find.setShortcut(QKeySequence("Ctrl+F"))
         act_find.triggered.connect(self._find_minor)
         m_view.addAction(act_find)
-        self.act_craft = self._toggle(m_view, "探査機の航路", "show_craft")
-        self.act_qso = self._toggle(m_view, "クエーサー", "show_quasars")
-        self.act_cmb = self._toggle(m_view, "宇宙マイクロ波背景放射", "show_cmb")
+        self.act_craft = self._toggle(m_view, tr("探査機の航路"), "show_craft")
+        self.act_qso = self._toggle(m_view, tr("クエーサー"), "show_quasars")
+        self.act_cmb = self._toggle(m_view, tr("宇宙マイクロ波背景放射"), "show_cmb")
         m_view.addSeparator()
-        act_full = QAction("全画面表示", self, checkable=True)
+        act_full = QAction(tr("全画面表示"), self, checkable=True)
         act_full.setShortcut(QKeySequence("F11"))
         act_full.toggled.connect(lambda on: self.showFullScreen() if on else self.showNormal())
         m_view.addAction(act_full)
 
         m_view.addSeparator()
         m_view.addAction(self.panel.toggleViewAction())
+        m_lang = m_view.addMenu("言語 / Language")
+        from PySide6.QtGui import QActionGroup
+        grp = QActionGroup(self)
+        cur = str(self.settings.value("ui/lang", "ja"))
+        for code, label in (("ja", "日本語"), ("en", "English")):
+            a = QAction(label, self, checkable=True)
+            a.setChecked(cur == code)
+            a.triggered.connect(lambda _=False, c=code: self._set_lang(c))
+            grp.addAction(a)
+            m_lang.addAction(a)
 
-        m_ev = mb.addMenu("天文現象(&E)")
-        act_ecl = QAction("日食・月食…", self)
+        m_ev = mb.addMenu(tr("天文現象(&E)"))
+        act_ecl = QAction(tr("日食・月食…"), self)
         act_ecl.setShortcut(QKeySequence("Ctrl+E"))
         act_ecl.triggered.connect(self._show_eclipses)
         m_ev.addAction(act_ecl)
-        act_met = QAction("流星群…", self)
+        act_met = QAction(tr("流星群…"), self)
         act_met.triggered.connect(self._show_showers)
         m_ev.addAction(act_met)
-        act_iss = QAction("人工衛星（ISS など）が見える時刻…", self)
+        act_iss = QAction(tr("人工衛星（ISS など）が見える時刻…"), self)
         act_iss.triggered.connect(self._show_passes)
         m_ev.addAction(act_iss)
-        act_conj = QAction("惑星・月の接近と見ごろ…", self)
+        act_conj = QAction(tr("惑星・月の接近と見ごろ…"), self)
         act_conj.triggered.connect(self._show_events)
         m_ev.addAction(act_conj)
         m_ev.addSeparator()
-        self.act_meteor = self._toggle(m_ev, "地上モードで流星を流す", "show_meteors")
-        self.act_artsat = self._toggle(m_ev, "人工衛星を表示する", "show_artsat")
+        self.act_meteor = self._toggle(m_ev, tr("地上モードで流星を流す"), "show_meteors")
+        self.act_artsat = self._toggle(m_ev, tr("人工衛星を表示する"), "show_artsat")
 
-        m_tour = mb.addMenu("ツアー(&T)")
+        m_tour = mb.addMenu(tr("ツアー(&T)"))
         for tid, title, _fn in tours.TOURS:
-            act = QAction(title, self)
+            act = QAction(tr(title), self)
             act.triggered.connect(lambda _=False, t=tid: self.start_tour(t))
             m_tour.addAction(act)
         m_tour.addSeparator()
-        m_rec = m_tour.addMenu("ツアーを動画にする")
+        m_rec = m_tour.addMenu(tr("ツアーを動画にする"))
         for tid, title, _fn in tours.TOURS:
-            act = QAction(title, self)
+            act = QAction(tr(title), self)
             act.triggered.connect(lambda _=False, t=tid: self.record_tour(t))
             m_rec.addAction(act)
         m_tour.addSeparator()
-        act_stop = QAction("ツアーを終わる", self)
+        act_stop = QAction(tr("ツアーを終わる"), self)
         act_stop.setShortcut(QKeySequence("Esc"))
         act_stop.triggered.connect(self.stop_tour)
         m_tour.addAction(act_stop)
 
-        m_help = mb.addMenu("ヘルプ(&H)")
-        act_manual = QAction("説明書", self)
+        m_help = mb.addMenu(tr("ヘルプ(&H)"))
+        act_manual = QAction(tr("説明書"), self)
         act_manual.setShortcut(QKeySequence("F1"))
         act_manual.triggered.connect(self._show_manual)
         m_help.addAction(act_manual)
-        act_howto = QAction("操作方法（早見表）", self)
-        act_howto.triggered.connect(lambda: QMessageBox.information(self, "操作方法", HELP_TEXT))
+        act_howto = QAction(tr("操作方法（早見表）"), self)
+        act_howto.triggered.connect(lambda: QMessageBox.information(self, tr("操作方法"), HELP_TEXT))
         m_help.addAction(act_howto)
-        act_about = QAction("そらみ窓について", self)
+        act_about = QAction(tr("そらみ窓について"), self)
         act_about.triggered.connect(self._about)
         m_help.addAction(act_about)
 
@@ -442,20 +453,28 @@ class MainWindow(QMainWindow):
         if not self.view.ground:
             st.setValue("view/target", self.view.target)
 
+    def _set_lang(self, code):
+        self.settings.setValue("ui/lang", code)
+        QMessageBox.information(self, "そらみ窓 / Soramado",
+                                "言語は、次にそらみ窓を起動したときから切り替わります。\n"
+                                "The language will change the next time you start Soramado.\n\n"
+                                "（英語のときも、天体の解説・ツアーの字幕・説明書は今は日本語です。）\n"
+                                "(Descriptions, tour captions and the manual are still in Japanese.)")
+
     def _check_gl(self):
         if self.view.gl_error:
-            QMessageBox.critical(self, "そらみ窓", self.view.gl_error)
+            QMessageBox.critical(self, tr("そらみ窓"), self.view.gl_error)
 
     def _show_manual(self):
         from pathlib import Path
         dlg = QDialog(self)
-        dlg.setWindowTitle("そらみ窓 説明書")
+        dlg.setWindowTitle(tr("そらみ窓 説明書"))
         dlg.resize(760, 640)
         lay = QVBoxLayout(dlg)
         tb = QTextBrowser()
         tb.setOpenExternalLinks(True)
         path = Path(__file__).parent / "manual.md"
-        tb.setMarkdown(path.read_text(encoding="utf-8") if path.is_file() else "説明書が見つかりません。")
+        tb.setMarkdown(path.read_text(encoding="utf-8") if path.is_file() else tr("説明書が見つかりません。"))
         lay.addWidget(tb)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
         bb.rejected.connect(dlg.reject)
@@ -470,7 +489,7 @@ class MainWindow(QMainWindow):
         if img.save(str(path)):
             self.statusBar().showMessage(f"画像を保存しました: {path}", 8000)
         else:
-            QMessageBox.warning(self, "画像の保存", f"保存できませんでした: {path}")
+            QMessageBox.warning(self, tr("画像の保存"), f"保存できませんでした: {path}")
 
     def _open_folders(self):
         for p in (recorder.picture_path().parent, recorder.video_path().parent):
@@ -480,7 +499,7 @@ class MainWindow(QMainWindow):
         v = self.view
         if on:
             if not recorder.ffmpeg_available():
-                QMessageBox.warning(self, "録画", "録画には ffmpeg が必要です。端末で次のコマンドを実行してください。\n\n"
+                QMessageBox.warning(self, tr("録画"), "録画には ffmpeg が必要です。端末で次のコマンドを実行してください。\n\n"
                                     "sudo apt install ffmpeg")
                 self.btn_rec.blockSignals(True)
                 self.btn_rec.setChecked(False)
@@ -489,11 +508,11 @@ class MainWindow(QMainWindow):
             img = v.grabFramebuffer()
             self._rec = recorder.VideoRecorder(recorder.video_path(), img.width(), img.height())
             v.start_recording(self._rec_frame)
-            self.btn_rec.setText("⏹ 停止 0:00")
+            self.btn_rec.setText(tr("⏹ 停止 0:00"))
             self.btn_rec.setStyleSheet("QPushButton { color: #ff5050; font-weight: bold; }")
         else:
             v.stop_recording()
-            self.btn_rec.setText("⏺ 録画")
+            self.btn_rec.setText(tr("⏺ 録画"))
             self.btn_rec.setStyleSheet("")
             rec, self._rec = self._rec, None
             if rec is None:
@@ -501,15 +520,15 @@ class MainWindow(QMainWindow):
             ok, err = rec.finish()
             if ok:
                 box = QMessageBox(self)
-                box.setWindowTitle("録画")
+                box.setWindowTitle(tr("録画"))
                 box.setText(f"{rec.seconds:.1f} 秒の動画を保存しました。\n{rec.path}")
-                b_open = box.addButton("フォルダを開く", QMessageBox.ActionRole)
+                b_open = box.addButton(tr("フォルダを開く"), QMessageBox.ActionRole)
                 box.addButton(QMessageBox.Ok)
                 box.exec()
                 if box.clickedButton() is b_open:
                     QDesktopServices.openUrl(QUrl.fromLocalFile(str(rec.path.parent)))
             else:
-                QMessageBox.warning(self, "録画", "動画を保存できませんでした。\n\n" + err[-800:])
+                QMessageBox.warning(self, tr("録画"), tr("動画を保存できませんでした。\n\n") + err[-800:])
 
     def _rec_frame(self, img):
         rec = self._rec
@@ -535,14 +554,14 @@ class MainWindow(QMainWindow):
         if getattr(self, "_qso_dl", None):
             return
         ans = QMessageBox.question(
-            self, "クエーサーのデータ",
+            self, tr("クエーサーのデータ"),
             "SDSS の第16次クエーサーカタログ（DR16Q、約75万個）を、天文データセンター VizieR から"
             "ダウンロードします（通信量 約20〜40MB、数分かかることがあります）。よろしいですか？")
         if ans != QMessageBox.Yes:
             return
         dl = cosmos.QuasarDownloader()
-        dlg = QProgressDialog("クエーサーのデータをダウンロードしています…", "キャンセル", 0, 0, self)
-        dlg.setWindowTitle("クエーサーのデータ")
+        dlg = QProgressDialog(tr("クエーサーのデータをダウンロードしています…"), tr("キャンセル"), 0, 0, self)
+        dlg.setWindowTitle(tr("クエーサーのデータ"))
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.canceled.connect(dl.cancel)
@@ -557,10 +576,10 @@ class MainWindow(QMainWindow):
             self._qso_dl = None
             if dl.ok:
                 self.view.reload_quasars()
-                QMessageBox.information(self, "クエーサーのデータ", f"{dl.count:,} 個のクエーサーを読み込みました。\n"
+                QMessageBox.information(self, tr("クエーサーのデータ"), f"{dl.count:,} 個のクエーサーを読み込みました。\n"
                                         "数億光年より遠くまで引くと見えます。")
             else:
-                QMessageBox.warning(self, "クエーサーのデータ", "ダウンロードできませんでした。\n\n" + dl.message)
+                QMessageBox.warning(self, tr("クエーサーのデータ"), tr("ダウンロードできませんでした。\n\n") + dl.message)
 
         timer.timeout.connect(poll)
         self._qso_dl = (dl, timer, dlg)
@@ -571,8 +590,8 @@ class MainWindow(QMainWindow):
 
     def _load_minor_files(self):
         files, _ = QFileDialog.getOpenFileNames(
-            self, "JPL の軌道要素の表を選ぶ（ELEMENTS.NUMBR(.gz) と ELEMENTS.COMET）", str(Path.home() / "ダウンロード"),
-            "軌道要素の表 (ELEMENTS.* *.gz *.txt);;すべてのファイル (*)")
+            self, tr("JPL の軌道要素の表を選ぶ（ELEMENTS.NUMBR(.gz) と ELEMENTS.COMET）"), str(Path.home() / tr("ダウンロード")),
+            tr("軌道要素の表 (ELEMENTS.* *.gz *.txt);;すべてのファイル (*)"))
         if files:
             self._download_minor(files)
 
@@ -581,14 +600,14 @@ class MainWindow(QMainWindow):
             return
         if files is None:
             ans = QMessageBox.question(
-                self, "小惑星・彗星のデータ",
+                self, tr("小惑星・彗星のデータ"),
                 "NASA JPL から、番号の付いた小惑星（約80万個）と彗星（約4千個）の軌道要素の表を"
                 "ダウンロードします。\n\n通信量は約60〜90MB、読み込みまで数分かかることがあります。よろしいですか？")
             if ans != QMessageBox.Yes:
                 return
         dl = mpl.MinorPlanetDownloader(files)
-        dlg = QProgressDialog("準備しています…", "キャンセル", 0, 0, self)
-        dlg.setWindowTitle("小惑星・彗星のデータ")
+        dlg = QProgressDialog(tr("準備しています…"), tr("キャンセル"), 0, 0, self)
+        dlg.setWindowTitle(tr("小惑星・彗星のデータ"))
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.canceled.connect(dl.cancel)
@@ -609,14 +628,14 @@ class MainWindow(QMainWindow):
                     n = mp.count(k)
                     if n:
                         lines.append(f"　{name}: {n:,} 個")
-                lines += ["", "点をダブルクリックすると、その天体の名前と軌道がわかります。",
-                          "「表示」→「小惑星・彗星を探す」（Ctrl+F）で名前から探せます。"]
+                lines += ["", tr("点をダブルクリックすると、その天体の名前と軌道がわかります。"),
+                          tr("「表示」→「小惑星・彗星を探す」（Ctrl+F）で名前から探せます。")]
                 if dl.message:
                     lines += ["", dl.message]
-                QMessageBox.information(self, "小惑星・彗星のデータ", "\n".join(lines))
+                QMessageBox.information(self, tr("小惑星・彗星のデータ"), "\n".join(lines))
             else:
                 QMessageBox.warning(
-                    self, "小惑星・彗星のデータ", "読み込めませんでした。\n\n" + dl.message +
+                    self, tr("小惑星・彗星のデータ"), tr("読み込めませんでした。\n\n") + dl.message +
                     "\n\nブラウザーで次のファイルをダウンロードして、「ファイル」→「小惑星・彗星のデータを"
                     f"手元のファイルから読み込む」で選ぶこともできます。\n{mpl.URL_NUMBERED}\n{mpl.URL_COMETS}")
 
@@ -626,8 +645,8 @@ class MainWindow(QMainWindow):
         timer.start(200)
 
     def _load_exo_file(self):
-        f, _ = QFileDialog.getOpenFileName(self, "NASA Exoplanet Archive の表（CSV）を選ぶ", str(Path.home() / "ダウンロード"),
-                                           "CSV (*.csv);;すべてのファイル (*)")
+        f, _ = QFileDialog.getOpenFileName(self, tr("NASA Exoplanet Archive の表（CSV）を選ぶ"), str(Path.home() / tr("ダウンロード")),
+                                           tr("CSV (*.csv);;すべてのファイル (*)"))
         if f:
             self._download_exo(f)
 
@@ -636,14 +655,14 @@ class MainWindow(QMainWindow):
             return
         if file is None:
             ans = QMessageBox.question(
-                self, "系外惑星のデータ",
+                self, tr("系外惑星のデータ"),
                 "NASA Exoplanet Archive から、これまでに見つかった系外惑星（約6千個）の表をダウンロードします。"
                 "\n\n通信量は約1〜2MBです。よろしいですか？")
             if ans != QMessageBox.Yes:
                 return
         dl = exo.ExoplanetDownloader(file)
-        dlg = QProgressDialog("系外惑星のデータを読み込んでいます…", "キャンセル", 0, 0, self)
-        dlg.setWindowTitle("系外惑星のデータ")
+        dlg = QProgressDialog(tr("系外惑星のデータを読み込んでいます…"), tr("キャンセル"), 0, 0, self)
+        dlg.setWindowTitle(tr("系外惑星のデータ"))
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.canceled.connect(dl.cancel)
@@ -660,13 +679,13 @@ class MainWindow(QMainWindow):
             if dl.ok:
                 self.view.reload_exo()
                 QMessageBox.information(
-                    self, "系外惑星のデータ",
+                    self, tr("系外惑星のデータ"),
                     f"{dl.count:,} 個の恒星をまわる、{dl.planets:,} 個の系外惑星を読み込みました。\n\n"
                     "系外惑星を持つ恒星には緑の丸が付きます。ダブルクリックすると、その惑星系へ飛んでいけます。\n"
                     "Ctrl+F で、恒星や惑星の名前（例: TRAPPIST-1、Proxima Cen、51 Peg）から探せます。")
             else:
                 QMessageBox.warning(
-                    self, "系外惑星のデータ", "読み込めませんでした。\n\n" + dl.message +
+                    self, tr("系外惑星のデータ"), tr("読み込めませんでした。\n\n") + dl.message +
                     "\n\nブラウザーで次のアドレスを開いて CSV を保存し、「ファイル」→「系外惑星のデータを手元の"
                     f"ファイル（CSV）から読み込む」で選ぶこともできます。\n{exo.URL}")
 
@@ -678,11 +697,11 @@ class MainWindow(QMainWindow):
     def _find_minor(self):
         mp, ex = self.view.mp, self.view.exo
         dlg = QDialog(self)
-        dlg.setWindowTitle("天体を探す（星座・星雲・小惑星・系外惑星）")
+        dlg.setWindowTitle(tr("天体を探す（星座・星雲・小惑星・系外惑星）"))
         dlg.resize(460, 440)
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("名前か番号を入れてください。\n例: オリオン、すばる、M42、Itokawa、Ryugu、433、Halley、TRAPPIST-1\n"
-                             "（小惑星・系外惑星はダウンロードしたときだけ、英語の名前で探せます）"))
+        lay.addWidget(QLabel(tr("名前か番号を入れてください。\n例: オリオン、すばる、M42、Itokawa、Ryugu、433、Halley、TRAPPIST-1\n"
+                                "（小惑星・系外惑星はダウンロードしたときだけ、英語の名前で探せます）")))
         ed = QLineEdit()
         lay.addWidget(ed)
         lst = QListWidget()
@@ -695,12 +714,12 @@ class MainWindow(QMainWindow):
                 tl = t.lower()
                 for i, c in enumerate(self.view.stars.constellations):
                     if t in c.name or tl == c.id.lower():
-                        it = QListWidgetItem(f"{c.name}　（星座）")
+                        it = QListWidgetItem(trx(f"{c.name}　（星座）"))
                         it.setData(Qt.UserRole, f"con:{i}")
                         lst.addItem(it)
                 for i, sa in enumerate(self.view.artsats):
                     if t in sa.ja or tl in sa.name.lower():
-                        it = QListWidgetItem(f"{sa.ja}　（人工衛星）")
+                        it = QListWidgetItem(trx(f"{sa.ja}　（人工衛星）"))
                         it.setData(Qt.UserRole, f"s:{i}")
                         lst.addItem(it)
                         if lst.count() > 40:
@@ -708,18 +727,18 @@ class MainWindow(QMainWindow):
                 for i, n in enumerate(neb.NEBULAE):
                     mname = f"m{n.m}" if n.m else ""
                     if t in n.name or tl == mname or tl.replace(" ", "") == n.id.lower():
-                        it = QListWidgetItem(f"{n.name}　（{neb.TYPE_JA[n.type]}）")
+                        it = QListWidgetItem(trx(f"{n.name}　（{neb.TYPE_JA[n.type]}）"))
                         it.setData(Qt.UserRole, f"n:{i}")
                         lst.addItem(it)
             if ex is not None:
                 for i in ex.find(ed.text()):
                     n = len(ex.systems[i]["planets"])
-                    it = QListWidgetItem(f"{ex.name(i)}　（系外惑星 {n} 個を持つ恒星）")
+                    it = QListWidgetItem(trx(f"{ex.name(i)}　（系外惑星 {n} 個を持つ恒星）"))
                     it.setData(Qt.UserRole, f"x:{i}")
                     lst.addItem(it)
             if mp is not None:
                 for i in mp.find(ed.text()):
-                    it = QListWidgetItem(f"{mp.name(i)}　（{mp.kind_name(i)}）")
+                    it = QListWidgetItem(trx(f"{mp.name(i)}　（{mp.kind_name(i)}）"))
                     it.setData(Qt.UserRole, f"mp:{i}")
                     lst.addItem(it)
             if lst.count():
@@ -744,7 +763,7 @@ class MainWindow(QMainWindow):
         ed.returnPressed.connect(go)
         lst.itemActivated.connect(go)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.button(QDialogButtonBox.Ok).setText("そこへ行く")
+        bb.button(QDialogButtonBox.Ok).setText(tr("そこへ行く"))
         bb.accepted.connect(go)
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
@@ -752,37 +771,43 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------- 日食・月食
 
+    def _set_status(self, text):
+        self.status_info.setText(trx(text))
+
     @staticmethod
-    def _local_time(jd, with_date=True):
+    def _local_time(jd, with_date=True):  # noqa: D401
         dt = astro.datetime_from_jd(jd).astimezone()
-        return dt.strftime("%Y年%-m月%-d日 %H:%M") if with_date else dt.strftime("%H:%M")
+        return dt.strftime(tr("%Y年%-m月%-d日 %H:%M")) if with_date else dt.strftime("%H:%M")
 
     def _eclipse_local_text(self, e) -> str:
+        return trx(self._eclipse_local_text_ja(e))
+
+    def _eclipse_local_text_ja(self, e) -> str:
         loc = e.local
         place = self.view.place
         if e.kind == "solar":
             if not loc.get("visible"):
                 return f"{place}では見えない"
-            kind = {"total": "皆既", "annular": "金環"}.get(loc["type"], "部分日食")
+            kind = {"total": tr("皆既"), "annular": tr("金環")}.get(loc["type"], tr("部分日食"))
             t = self._local_time(loc["jd"], False)
-            txt = f"{kind}（最大 {t}、太陽の{loc['frac'] * 100:.0f}%がかくれる）" if kind == "部分日食" else \
+            txt = f"{kind}（最大 {t}、太陽の{loc['frac'] * 100:.0f}%がかくれる）" if kind == tr("部分日食") else \
                 f"{kind}が見える（最大 {t}）"
             if loc["alt"] < 0:
-                txt += "・最大のときは地平線の下"
+                txt += tr("・最大のときは地平線の下")
             return txt
         if not loc.get("visible"):
             return f"{place}では見えない（月が地平線の下）"
         if loc.get("all"):
             return f"全部見える（最大のとき月の高度 {loc['alt']:.0f}°）"
         if loc.get("alt_start", 0) > 0 >= loc.get("alt_end", 0):
-            return "途中まで見える（食の途中で月が沈む）"
+            return tr("途中まで見える（食の途中で月が沈む）")
         if loc.get("alt_start", 0) <= 0 < loc.get("alt_end", 0):
-            return "途中から見える（欠けたまま月が昇る）"
-        return "一部が見える"
+            return tr("途中から見える（欠けたまま月が昇る）")
+        return tr("一部が見える")
 
     def _show_eclipses(self):
         if not eclipses.available():
-            QMessageBox.warning(self, "日食・月食", "日食・月食を探すには PyEphem（python3-ephem）が必要です。")
+            QMessageBox.warning(self, tr("日食・月食"), tr("日食・月食を探すには PyEphem（python3-ephem）が必要です。"))
             return
         from PySide6.QtWidgets import QApplication
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -793,22 +818,22 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"日食・月食（これから15年・観測地 {self.view.place}）")
+        dlg.setWindowTitle(trx(f"日食・月食（これから15年・観測地 {self.view.place}）"))
         dlg.resize(860, 560)
         lay = QVBoxLayout(dlg)
-        only = QCheckBox(f"{self.view.place}で見えるものだけ")
+        only = QCheckBox(trx(f"{self.view.place}で見えるものだけ"))
         lay.addWidget(only)
         tbl = QTableWidget(0, 4)
-        tbl.setHorizontalHeaderLabels(["日時（最大）", "種類", f"{self.view.place}での見え方", "食分"])
+        tbl.setHorizontalHeaderLabels([tr("日時（最大）"), tr("種類"), trx(f"{self.view.place}での見え方"), tr("食分")])
         tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
         tbl.setSelectionMode(QAbstractItemView.SingleSelection)
         tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         tbl.verticalHeader().setVisible(False)
         tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         lay.addWidget(tbl, 1)
-        note = QLabel("日時は地球全体で食がいちばん大きくなるとき（このパソコンの時刻帯）。時刻は数分ずれることがあります。\n"
-                      "「宇宙から見る」は影の様子を宇宙から、「地上から見る」は観測地から空を見上げます（▶ 再生で食が進みます）。\n"
-                      "※ 太陽を直接見ると目を傷めます。本物の日食は、必ず日食グラスなどで観察してください。")
+        note = QLabel(tr("日時は地球全体で食がいちばん大きくなるとき（このパソコンの時刻帯）。時刻は数分ずれることがあります。\n"
+                         "「宇宙から見る」は影の様子を宇宙から、「地上から見る」は観測地から空を見上げます（▶ 再生で食が進みます）。\n"
+                         "※ 太陽を直接見ると目を傷めます。本物の日食は、必ず日食グラスなどで観察してください。"))
         note.setWordWrap(True)
         lay.addWidget(note)
         rows = []
@@ -836,9 +861,9 @@ class MainWindow(QMainWindow):
         only.toggled.connect(fill)
         fill()
         bb = QDialogButtonBox()
-        b_space = bb.addButton("宇宙から見る", QDialogButtonBox.ActionRole)
-        b_ground = bb.addButton("地上から見る", QDialogButtonBox.ActionRole)
-        bb.addButton("閉じる", QDialogButtonBox.RejectRole)
+        b_space = bb.addButton(tr("宇宙から見る"), QDialogButtonBox.ActionRole)
+        b_ground = bb.addButton(tr("地上から見る"), QDialogButtonBox.ActionRole)
+        bb.addButton(tr("閉じる"), QDialogButtonBox.RejectRole)
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
 
@@ -864,7 +889,7 @@ class MainWindow(QMainWindow):
         dlg.setWindowTitle(title)
         dlg.resize(900, 560)
         lay = QVBoxLayout(dlg)
-        only = QCheckBox(f"{self.view.place}で見えるものだけ")
+        only = QCheckBox(trx(f"{self.view.place}で見えるものだけ"))
         lay.addWidget(only)
         tbl = QTableWidget(0, len(headers))
         tbl.setHorizontalHeaderLabels(headers)
@@ -874,7 +899,7 @@ class MainWindow(QMainWindow):
         tbl.verticalHeader().setVisible(False)
         tbl.horizontalHeader().setSectionResizeMode(len(headers) - 1, QHeaderView.Stretch)
         lay.addWidget(tbl, 1)
-        lab = QLabel(note)
+        lab = QLabel(tr(note))
         lab.setWordWrap(True)
         lay.addWidget(lab)
         shown = []
@@ -888,7 +913,7 @@ class MainWindow(QMainWindow):
                 r = tbl.rowCount()
                 tbl.insertRow(r)
                 for c, t in enumerate(cells):
-                    it = QTableWidgetItem(t)
+                    it = QTableWidgetItem(trx(t))
                     if vis:
                         it.setForeground(QColor(120, 220, 140))
                     tbl.setItem(r, c, it)
@@ -900,8 +925,8 @@ class MainWindow(QMainWindow):
         only.toggled.connect(fill)
         fill()
         bb = QDialogButtonBox()
-        b_go = bb.addButton("地上から見る", QDialogButtonBox.ActionRole)
-        bb.addButton("閉じる", QDialogButtonBox.RejectRole)
+        b_go = bb.addButton(tr("地上から見る"), QDialogButtonBox.ActionRole)
+        bb.addButton(tr("閉じる"), QDialogButtonBox.RejectRole)
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
 
@@ -929,7 +954,7 @@ class MainWindow(QMainWindow):
 
     def _show_showers(self):
         if not evt.available():
-            QMessageBox.warning(self, "流星群", "PyEphem（python3-ephem）が必要です。")
+            QMessageBox.warning(self, tr("流星群"), tr("PyEphem（python3-ephem）が必要です。"))
             return
         v = self.view
         nights = evt.shower_nights(astro.jd_now() - 2, 370, v.lat, v.lon)
@@ -947,14 +972,15 @@ class MainWindow(QMainWindow):
             self._ground_at(jd)
             ok = v.look_dir(evt.radiant_vector(n.shower), fov=100.0)
             self.act_meteor.setChecked(True)
-            msg = f"{n.shower.name}：{n.shower.note}（流れる数は実際の約{v.METEOR_BOOST:.0f}倍に増やしています）"
+            msg = (f"{n.shower.name} (meteors shown about {v.METEOR_BOOST:.0f}× more often than real)" if EN_MODE else
+                   f"{n.shower.name}：{n.shower.note}（流れる数は実際の約{v.METEOR_BOOST:.0f}倍に増やしています）")
             if not ok:
-                msg = "このとき放射点は地平線の下です。" + msg
-            self.statusBar().showMessage(msg, 20000)
+                msg = tr("このとき放射点は地平線の下です。") + msg
+            self.statusBar().showMessage(trx(msg), 20000)
 
         self._event_table(
-            f"流星群（これから1年・観測地 {v.place}）",
-            ["極大", "流星群", "見やすい時刻", "見える数の目安", "月明かり", "くわしく"], rows,
+            trx(f"流星群（これから1年・観測地 {v.place}）"),
+            [tr("極大"), tr("流星群"), tr("見やすい時刻"), tr("見える数の目安"), tr("月明かり"), tr("くわしく")], rows,
             "見える数の目安は、空の暗い場所で放射点が高いときの1時間あたりの数です（町なかではもっと少なくなります）。"
             "流星は放射点から四方へ飛ぶので、放射点だけでなく空全体を広く見るのがこつです。\n"
             "「地上から見る」で、見やすい時刻の空に流星が流れます（流れる数は実際の約10倍に増やしています）。",
@@ -964,8 +990,8 @@ class MainWindow(QMainWindow):
         if getattr(self, "_tle_dl", None):
             return
         dl = artsat.TleDownloader()
-        dlg = QProgressDialog("人工衛星のデータをダウンロードしています…", None, 0, 0, self)
-        dlg.setWindowTitle("人工衛星のデータ")
+        dlg = QProgressDialog(tr("人工衛星のデータをダウンロードしています…"), None, 0, 0, self)
+        dlg.setWindowTitle(tr("人工衛星のデータ"))
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         timer = QTimer(self)
@@ -978,7 +1004,7 @@ class MainWindow(QMainWindow):
             self._tle_dl = None
             if dl.ok:
                 self.view.reload_artsats()
-                QMessageBox.information(self, "人工衛星のデータ",
+                QMessageBox.information(self, tr("人工衛星のデータ"),
                                         f"{dl.count} 個の人工衛星の軌道を読み込みました（CelesTrak）。\n\n"
                                         "地球に近づくと、国際宇宙ステーションなどが地球のまわりを回ります。"
                                         "地上モードでは、空を横切る衛星が見えます。\n"
@@ -986,7 +1012,7 @@ class MainWindow(QMainWindow):
                 if then:
                     then()
             else:
-                QMessageBox.warning(self, "人工衛星のデータ", "ダウンロードできませんでした。\n\n" + dl.message)
+                QMessageBox.warning(self, tr("人工衛星のデータ"), tr("ダウンロードできませんでした。\n\n") + dl.message)
 
         timer.timeout.connect(poll)
         self._tle_dl = (dl, timer, dlg)
@@ -996,10 +1022,10 @@ class MainWindow(QMainWindow):
     def _show_passes(self):
         v = self.view
         if not artsat.available():
-            QMessageBox.warning(self, "人工衛星", "PyEphem（python3-ephem）が必要です。")
+            QMessageBox.warning(self, tr("人工衛星"), tr("PyEphem（python3-ephem）が必要です。"))
             return
         if not v.artsats:
-            ans = QMessageBox.question(self, "人工衛星", "人工衛星のデータ（CelesTrak の軌道要素、数十KB）を"
+            ans = QMessageBox.question(self, tr("人工衛星"), "人工衛星のデータ（CelesTrak の軌道要素、数十KB）を"
                                        "ダウンロードしますか？")
             if ans == QMessageBox.Yes:
                 self._download_tle(then=self._show_passes)
@@ -1016,8 +1042,8 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         ps.sort(key=lambda p: p.rise_jd)
-        dirs = ["北", "北北東", "北東", "東北東", "東", "東南東", "南東", "南南東",
-                "南", "南南西", "南西", "西南西", "西", "西北西", "北西", "北北西"]
+        dirs = [tr("北"), tr("北北東"), tr("北東"), tr("東北東"), tr("東"), tr("東南東"), tr("南東"), tr("南南東"),
+                tr("南"), tr("南南西"), tr("南西"), tr("西南西"), tr("西"), tr("西北西"), tr("北西"), tr("北北西")]
 
         def d(az):
             return dirs[int((az + 11.25) // 22.5) % 16]
@@ -1027,7 +1053,7 @@ class MainWindow(QMainWindow):
             cells = [self._local_time(p.rise_jd), p.sat.ja,
                      f"{d(p.rise_az)} → 最大 {p.max_alt:.0f}°（{d(p.max_az)}・{self._local_time(p.max_jd, False)}）"
                      f" → {d(p.set_az)}",
-                     "見える（夜空で太陽の光を反射）" if p.visible else "見えない（昼間か、地球の影の中）"]
+                     tr("見える（夜空で太陽の光を反射）") if p.visible else tr("見えない（昼間か、地球の影の中）")]
             rows.append((cells, p.visible, p))
 
         def go(p):
@@ -1043,13 +1069,14 @@ class MainWindow(QMainWindow):
         note = ("高度10°より高く昇るときの一覧です（これから10日）。「見える」は、空が暗く、衛星に太陽の光が当たっているときで、"
                 "明るい星のような光がゆっくり空を横切ります。「地上から見る」で、そのときの空を実時間で見られます。")
         if age > 7:
-            note = f"⚠ 軌道のデータが {age:.0f} 日前のもので古くなっています。「ファイル」からダウンロードし直してください。\n" + note
-        self._event_table(f"人工衛星が見える時刻（これから10日・観測地 {v.place}）",
-                          ["昇る時刻", "衛星", "動き（方角）", "見え方"], rows, note, go)
+            note = (f"⚠ Orbit data is {age:.0f} days old. Download it again from the File menu.\n" if EN_MODE else
+                    f"⚠ 軌道のデータが {age:.0f} 日前のもので古くなっています。「ファイル」からダウンロードし直してください。\n") + tr(note)
+        self._event_table(trx(f"人工衛星が見える時刻（これから10日・観測地 {v.place}）"),
+                          [tr("昇る時刻"), tr("衛星"), tr("動き（方角）"), tr("見え方")], rows, note, go)
 
     def _show_events(self):
         if not evt.available():
-            QMessageBox.warning(self, "惑星・月の接近", "PyEphem（python3-ephem）が必要です。")
+            QMessageBox.warning(self, tr("惑星・月の接近"), tr("PyEphem（python3-ephem）が必要です。"))
             return
         from PySide6.QtWidgets import QApplication
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -1063,14 +1090,14 @@ class MainWindow(QMainWindow):
             loc = e.local
             if loc.get("jd"):
                 when = self._local_time(loc["jd"], True)
-                look = f"{when}ごろ 高さ {loc['alt']:.0f}°" if loc["visible"] else "見えにくい（低い・明るい空）"
+                look = f"{when}ごろ 高さ {loc['alt']:.0f}°" if loc["visible"] else tr("見えにくい（低い・明るい空）")
             else:
-                look = "見えない"
+                look = tr("見えない")
             det = e.detail
             if "sep" in loc:
                 det += f"／{v.place}から {loc['sep']:.1f}°"
             if e.kind == "occult":
-                det += "（地球のどこかで月が惑星をかくす惑星食）"
+                det += tr("（地球のどこかで月が惑星をかくす惑星食）")
             rows.append(([self._local_time(e.jd), e.title, look, det], bool(loc.get("visible")), e))
 
         def go(e):
@@ -1086,11 +1113,11 @@ class MainWindow(QMainWindow):
                    "elong": 50.0}[e.kind]
             ok = v.look_dir(mid / np.linalg.norm(mid), fov=fov)
             if not ok:
-                self.statusBar().showMessage("このとき、観測地では地平線の下です", 8000)
+                self.statusBar().showMessage(tr("このとき、観測地では地平線の下です"), 8000)
 
         self._event_table(
-            f"惑星・月の接近と見ごろ（これから1年あまり・観測地 {v.place}）",
-            ["日時", "できごと", f"{v.place}での見やすい時刻", "くわしく"], rows,
+            trx(f"惑星・月の接近と見ごろ（これから1年あまり・観測地 {v.place}）"),
+            [tr("日時"), tr("できごと"), trx(f"{v.place}での見やすい時刻"), tr("くわしく")], rows,
             "日時は、いちばん近づくとき（地球の中心から見た計算）です。月は地球に近いので、見る場所によって近づき方が"
             "少し変わります。「地上から見る」は、観測地で日の入り後・日の出前の、いちばん高く見える時刻の空を出します。",
             go)
@@ -1110,7 +1137,7 @@ class MainWindow(QMainWindow):
             ok = v.look_at("sun" if e.kind == "solar" else "moon")
             v.g_fov = 3.0
             if not ok:
-                self.statusBar().showMessage("そのとき、観測地では地平線の下です（地面を消すと見えます）", 8000)
+                self.statusBar().showMessage(tr("そのとき、観測地では地平線の下です（地面を消すと見えます）"), 8000)
         else:
             v.set_jd(e.jd_max)
             if self.btn_ground.isChecked():
@@ -1136,7 +1163,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 解説パネル
 
     def _build_panel(self):
-        self.panel = QDockWidget("解説", self)
+        self.panel = QDockWidget(tr("解説"), self)
         self.panel.setObjectName("panel")
         self.panel_text = QTextBrowser()
         self.panel_text.setOpenExternalLinks(True)
@@ -1170,13 +1197,13 @@ class MainWindow(QMainWindow):
             stars = sorted([i for i in range(min(v.stars.count, 3000)) if str(v.stars.con[i]) == c.id],
                            key=lambda i: v.stars.mag[i])[:5]
             if stars:
-                html.append("<h3>おもな星</h3><ul>")
+                html.append(tr("<h3>おもな星</h3><ul>"))
                 for i in stars:
                     html.append(f"<li>{v.stars.short_name(i)}（{v.stars.mag[i]:.1f}等）</li>")
                 html.append("</ul>")
-            html.append("<p style='color:#888'>星座の名前をダブルクリックすると選べます。ほかの場所をダブルクリックすると選択が外れます。</p>")
+            html.append(tr("<p style='color:#888'>星座の名前をダブルクリックすると選べます。ほかの場所をダブルクリックすると選択が外れます。</p>"))
         elif v.ground:
-            html.append("<h2>地上から見た空</h2>")
+            html.append(tr("<h2>地上から見た空</h2>"))
             html.append(f"<p>{v.place}（北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）から見上げた空です。</p>"
                         "<p>星は東から昇って南の空を通り、西に沈みます。これは地球が西から東へ自転しているためです。"
                         "北の空の星は、北極星のまわりを反時計回りに回って見えます。</p>")
@@ -1204,7 +1231,7 @@ class MainWindow(QMainWindow):
                             f"<br>1日に {sa.rev_per_day:.1f} 周</p>")
                 html.append(f"<p>{sa.note}</p>")
                 age = v.jd - sa.epoch_jd
-                html.append(f"<p style='color:#888'>位置は CelesTrak の軌道要素（{abs(age):.0f}日{'前' if age >= 0 else '後'}"
+                html.append(f"<p style='color:#888'>位置は CelesTrak の軌道要素（{abs(age):.0f}日{tr('前') if age >= 0 else tr('後')}"
                             "のもの）から計算しています。データが古くなるほど、位置はずれていきます。</p>")
             elif v.is_neb(t):
                 n = neb.NEBULAE[int(t[2:])]
@@ -1241,7 +1268,7 @@ class MainWindow(QMainWindow):
                 html.append("<p style='color:#888'>軌道の要素は NASA JPL の表によります。位置は惑星の引力を"
                             "入れていない、おおよそのものです。直径は明るさからの推定です。</p>")
             elif t == "u:cmb":
-                html.append("<h2>観測できる宇宙の果て</h2>")
+                html.append(tr("<h2>観測できる宇宙の果て</h2>"))
                 html.append(f"<p>{text_for('u:cmb')}</p>")
                 html.append("<p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
             else:
@@ -1252,6 +1279,10 @@ class MainWindow(QMainWindow):
                     html.append(f"<p>{txt}</p>")
                 html.append("<p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
         html.append("</div>")
+        if EN_MODE:
+            # 数字や単位の入った短い行だけ英語にする（解説の文章は、いまは日本語のまま）
+            html = [trx(h) if (len(h) < 160 or "<br>" in h) and "。" not in h else h for h in html]
+            html.append("<p style='color:#888'>(Detailed descriptions are currently available in Japanese only.)</p>")
         self.panel_text.setHtml("".join(html))
 
     # ---------------------------------------------------------- ツアー
@@ -1269,11 +1300,11 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.tour_label, 1)
         self.tour_count = QLabel()
         lay.addWidget(self.tour_count)
-        for text, step in (("◀ 前", -1), ("次 ▶", +1)):
+        for text, step in ((tr("◀ 前"), -1), (tr("次 ▶"), +1)):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, d=step: self._tour_go(d))
             lay.addWidget(b)
-        b = QPushButton("終了")
+        b = QPushButton(tr("終了"))
         b.clicked.connect(self.stop_tour)
         lay.addWidget(b)
         self.tour_bar.hide()
@@ -1356,14 +1387,14 @@ class MainWindow(QMainWindow):
         self.view.set_ground(on)
         self.btn_all.setEnabled(not on)
         self.sl_mag.setEnabled(not on)
-        self.btn_ground.setText("🚀 宇宙へ戻る" if on else "🔭 地上から見る")
+        self.btn_ground.setText(tr("🚀 宇宙へ戻る") if on else tr("🔭 地上から見る"))
         # 1日/秒より速いと空がぐるぐる回って見づらいので、地上では少しゆっくりにする
         if on and self.cb_speed.currentIndex() > 3:
             self.cb_speed.setCurrentIndex(1)
         self.view.setFocus()
 
     def _restore_place(self):
-        name = self.settings.value("place/name", "大阪")
+        name = self.settings.value("place/name", tr("大阪"))
         lat = float(self.settings.value("place/lat", 34.69))
         lon = float(self.settings.value("place/lon", 135.50))
         self.view.set_place(name, lat, lon)
@@ -1395,29 +1426,29 @@ class MainWindow(QMainWindow):
 
     def _ask_place(self):
         dlg = QDialog(self)
-        dlg.setWindowTitle("観測地")
+        dlg.setWindowTitle(tr("観測地"))
         form = QFormLayout(dlg)
-        ed_name = QLineEdit("観測地")
+        ed_name = QLineEdit(tr("観測地"))
         sp_lat = QDoubleSpinBox()
         sp_lat.setRange(-90, 90)
         sp_lat.setDecimals(3)
         sp_lat.setValue(self.view.lat)
-        sp_lat.setSuffix("°（北緯が＋）")
+        sp_lat.setSuffix(tr("°（北緯が＋）"))
         sp_lon = QDoubleSpinBox()
         sp_lon.setRange(-180, 180)
         sp_lon.setDecimals(3)
         sp_lon.setValue(self.view.lon)
-        sp_lon.setSuffix("°（東経が＋）")
-        form.addRow("名前", ed_name)
-        form.addRow("緯度", sp_lat)
-        form.addRow("経度", sp_lon)
+        sp_lon.setSuffix(tr("°（東経が＋）"))
+        form.addRow(tr("名前"), ed_name)
+        form.addRow(tr("緯度"), sp_lat)
+        form.addRow(tr("経度"), sp_lon)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
         form.addRow(bb)
         if dlg.exec() != QDialog.Accepted:
             return None
-        return (ed_name.text().strip() or "観測地", sp_lat.value(), sp_lon.value())
+        return (ed_name.text().strip() or tr("観測地"), sp_lat.value(), sp_lon.value())
 
     def _toggle(self, menu, label, attr):
         act = QAction(label, self, checkable=True, checked=getattr(self.view, attr))
@@ -1433,7 +1464,7 @@ class MainWindow(QMainWindow):
         lim = v / 10.0
         self.view.limit_mag = lim
         n = int(np.searchsorted(self.view.stars.mag, lim, side="right"))
-        self.lb_stars.setText(f"{lim:.1f}等まで（{n:,}個）")
+        self.lb_stars.setText(trx(f"{lim:.1f}等まで（{n:,}個）"))
         self.view.update()
 
     def _on_toggle_orbits(self, on):
@@ -1456,7 +1487,7 @@ class MainWindow(QMainWindow):
         if m < 1.05:
             m = 1.0
         self.view.set_magnify(m)
-        self.lb_mag.setText("×1（実寸）" if m == 1.0 else f"×{m:,.0f}")
+        self.lb_mag.setText(tr("×1（実寸）") if m == 1.0 else f"×{m:,.0f}")
 
     def _on_target_changed(self, key):
         i = self.cb_target.findData(key)
@@ -1475,7 +1506,7 @@ class MainWindow(QMainWindow):
         self._ui_ticks = getattr(self, "_ui_ticks", 0) + 1
         if self.panel.isVisible():
             self._update_panel(force=(self._ui_ticks % 20 == 0))
-        self.btn_play.setText("▶ 再生" if v.paused else "⏸ 停止")
+        self.btn_play.setText(tr("▶ 再生") if v.paused else tr("⏸ 停止"))
         if not self.dt_edit.hasFocus():
             unix = (v.jd - 2440587.5) * 86400.0
             self.dt_edit.blockSignals(True)
@@ -1485,41 +1516,41 @@ class MainWindow(QMainWindow):
         if v.selected_con >= 0 and v.selected_star < 0:
             from . import constellation_info as ci
             c = v.stars.constellations[v.selected_con]
-            self.status_info.setText(f"<b>{c.name}</b>　｜　見ごろ：{ci.text(c.id)[0]}")
+            self._set_status(f"<b>{c.name}</b>　｜　見ごろ：{ci.text(c.id)[0]}")
             self._refresh_warn(v)
             return
         elif v.selected_star >= 0:
-            self.status_info.setText("★ " + v.stars.describe(v.selected_star))
+            self._set_status("★ " + v.stars.describe(v.selected_star))
             self._refresh_warn(v)
             return
         key = v.target
         if key in crafts.BY_KEY:
             sc = crafts.BY_KEY[key]
             p = crafts.position(sc, v.jd)
-            parts = [f"<b>{sc.name}</b>", "探査機"]
+            parts = [f"<b>{sc.name}</b>", tr("探査機")]
             if p is None:
                 t0, _t1 = crafts.span(sc)
-                parts.append("打ち上げ前" if v.jd < t0 else "この画面で表示する航路はここまで")
+                parts.append(tr("打ち上げ前") if v.jd < t0 else tr("この画面で表示する航路はここまで"))
             else:
                 parts += [f"太陽から {_fmt_dist(np.linalg.norm(p))}",
                           f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}",
                           f"最近のできごと: {crafts.last_event(sc, v.jd)}"]
-            parts.append("※ 航路はおおよそ")
-            self.status_info.setText("　｜　".join(parts))
+            parts.append(tr("※ 航路はおおよそ"))
+            self._set_status("　｜　".join(parts))
             self._refresh_warn(v)
             return
         if v.is_artsat(key):
             sa = v.artsats[int(key[2:])]
             parts = [f"<b>{sa.ja}</b>", f"高度 約{artsat.height_km(sa, v.jd):,.0f} km",
                      f"1周 約{1440 / sa.rev_per_day:.0f} 分", f"視点の距離 {_fmt_dist(v.dist)}"]
-            self.status_info.setText("　｜　".join(parts))
+            self._set_status("　｜　".join(parts))
             self._refresh_warn(v)
             return
         if v.is_neb(key):
             n = neb.NEBULAE[int(key[2:])]
-            parts = [f"<b>{n.name}</b>"] + neb.describe(n) + ["※ 形は模式図"]
+            parts = [f"<b>{n.name}</b>"] + neb.describe(n) + [tr("※ 形は模式図")]
             parts.append(f"視点の距離 {_fmt_dist(v.dist)}")
-            self.status_info.setText("　｜　".join(parts))
+            self._set_status("　｜　".join(parts))
             self._refresh_warn(v)
             return
         if v.is_exo(key):
@@ -1527,7 +1558,7 @@ class MainWindow(QMainWindow):
             parts = [f"<b>{v.exo.name(i)}</b>"] + v.exo.describe_system(i)
             surface = v.dist - v.display_radius(key)
             parts.append(f"視点の距離 {_fmt_dist(max(surface, 0.0))}（恒星から）")
-            self.status_info.setText("　｜　".join(parts))
+            self._set_status("　｜　".join(parts))
             self._refresh_warn(v)
             return
         if v.is_minor(key):
@@ -1535,13 +1566,13 @@ class MainWindow(QMainWindow):
             p = v.mp.position(i, v.jd)
             parts = [f"<b>{v.mp.name(i)}</b>"] + v.mp.describe(i, v.jd)[:2] + [
                 f"太陽から {_fmt_dist(np.linalg.norm(p))}",
-                f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}", "※ 位置はおおよそ"]
-            self.status_info.setText("　｜　".join(parts))
+                f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}", tr("※ 位置はおおよそ")]
+            self._set_status("　｜　".join(parts))
             self._refresh_warn(v)
             return
         if key == "u:cmb":
-            q = f"クエーサー {v.qso_count:,} 個を表示中" if v.qso_count else "クエーサーのデータは未ダウンロード（ファイルメニュー）"
-            self.status_info.setText("<b>観測できる宇宙の果て</b>　｜　宇宙マイクロ波背景放射まで 約"
+            q = f"クエーサー {v.qso_count:,} 個を表示中" if v.qso_count else tr("クエーサーのデータは未ダウンロード（ファイルメニュー）")
+            self._set_status("<b>観測できる宇宙の果て</b>　｜　宇宙マイクロ波背景放射まで 約"
                                      f"{cosmos.CMB_MPC * 3.26156e6 / 1e8:,.0f} 億光年（共動距離）　｜　{q}"
                                      "　｜　視点の距離 " + format_length(v.dist))
             self._refresh_warn(v)
@@ -1554,28 +1585,28 @@ class MainWindow(QMainWindow):
             elif sun_alt > -18:
                 parts.append(f"太陽の高度 {sun_alt:.0f}°（薄明）")
             else:
-                parts.append("夜")
+                parts.append(tr("夜"))
             if key in BY_KEY and key not in ("earth",):
                 alt, az = v.ground_altaz(key)
-                where = f"高度 {alt:.1f}°・方位 {az:.0f}°" if alt > 0 else "地平線の下"
+                where = f"高度 {alt:.1f}°・方位 {az:.0f}°" if alt > 0 else tr("地平線の下")
                 parts.append(f"{BY_KEY[key].name}: {where}")
-            self.status_info.setText("　｜　".join(parts))
+            self._set_status("　｜　".join(parts))
             self._refresh_warn(v)
             return
         if key.startswith("c:"):
-            self.status_info.setText(v.gcat.describe(int(key[2:])) + "　｜　視点の距離 "
+            self._set_status(v.gcat.describe(int(key[2:])) + tr("　｜　視点の距離 ")
                                      + format_length(v.dist))
             self._refresh_warn(v)
             return
         if key in gx.BY_KEY:
-            self.status_info.setText(gx.describe(gx.BY_KEY[key]) + "　｜　視点の距離 "
+            self._set_status(gx.describe(gx.BY_KEY[key]) + tr("　｜　視点の距離 ")
                                      + format_length(v.dist))
             self._refresh_warn(v)
             return
         b = BY_KEY[key]
         if key in sbs.BY_KEY or key == "pluto":
             sb = sbs.BY_KEY.get(key)
-            kind = sbs.KIND_JA[sb.kind] if sb else "準惑星"
+            kind = sbs.KIND_JA[sb.kind] if sb else tr("準惑星")
             dia = b.radius_km * 2
             parts = [f"<b>{b.name}</b>", kind,
                      f"直径 約{dia:,.0f} km" if dia >= 10 else f"直径 約{dia * 1000:,.0f} m",
@@ -1583,8 +1614,8 @@ class MainWindow(QMainWindow):
                      f"地球から {_fmt_dist(np.linalg.norm(v.positions[key] - v.positions['earth']))}"]
             if sb and sb.note:
                 parts.append(sb.note)
-            parts.append("※ 位置はおおよそ")
-            self.status_info.setText("　｜　".join(parts))
+            parts.append(tr("※ 位置はおおよそ"))
+            self._set_status("　｜　".join(parts))
             self._refresh_warn(v)
             return
         parts = [f"<b>{b.name}</b>",
@@ -1597,7 +1628,7 @@ class MainWindow(QMainWindow):
             if st is not None:
                 per = f"公転周期 {st.period:,.1f} 日" if st.period >= 2 else f"公転周期 {st.period * 24:,.1f} 時間"
                 if st.i > 90:
-                    per += "（逆行）"
+                    per += tr("（逆行）")
                 parts.append(per)
         if key != "sun":
             parts.append(f"太陽から {_fmt_dist(np.linalg.norm(v.positions[key])):s}")
@@ -1608,13 +1639,13 @@ class MainWindow(QMainWindow):
         surface = v.dist - v.display_radius(key)
         parts.append(f"視点の距離 {_fmt_dist(max(surface, 0.0))}（表面から）")
         if key in sats.BY_KEY and not sats.uses_ephem(key):
-            parts.append("※ 位置はおおよそ")
-        self.status_info.setText("　｜　".join(parts))
+            parts.append(tr("※ 位置はおおよそ"))
+        self._set_status("　｜　".join(parts))
         self._refresh_warn(v)
 
     def _refresh_warn(self, v):
         if not astro.elements_valid(v.jd):
-            self.status_warn.setText(f"※ {astro.VALID_FROM_YEAR}〜{astro.VALID_TO_YEAR}年の範囲外のため、惑星の位置は概算です")
+            self.status_warn.setText(trx(f"※ {astro.VALID_FROM_YEAR}〜{astro.VALID_TO_YEAR}年の範囲外のため、惑星の位置は概算です"))
         else:
             self.status_warn.setText("")
 
@@ -1625,7 +1656,7 @@ class MainWindow(QMainWindow):
             return
         self.settings.setValue("asked_textures", True)
         ans = QMessageBox.question(
-            self, "惑星の画像",
+            self, tr("惑星の画像"),
             "惑星の表面の画像（Solar System Scope 提供、約10MB）をダウンロードしますか？\n\n"
             "ダウンロードしない場合は、簡易的な模様で表示します。\n"
             "あとからでも「ファイル」メニューからダウンロードできます。")
@@ -1635,16 +1666,16 @@ class MainWindow(QMainWindow):
     def _start_download(self, force=False):
         files = textures.missing_textures()
         if not files and force:
-            ans = QMessageBox.question(self, "惑星の画像",
-                                       "画像はすべてダウンロード済みです。もう一度ダウンロードしますか？")
+            ans = QMessageBox.question(self, tr("惑星の画像"),
+                                       tr("画像はすべてダウンロード済みです。もう一度ダウンロードしますか？"))
             if ans != QMessageBox.Yes:
                 return
             from .bodies import all_texture_files
             files = all_texture_files()
         if not files or self._download:
             return
-        dlg = QProgressDialog("画像をダウンロードしています…", "キャンセル", 0, len(files), self)
-        dlg.setWindowTitle("惑星の画像")
+        dlg = QProgressDialog(tr("画像をダウンロードしています…"), tr("キャンセル"), 0, len(files), self)
+        dlg.setWindowTitle(tr("惑星の画像"))
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         dlg.setAutoClose(False)
@@ -1667,7 +1698,7 @@ class MainWindow(QMainWindow):
             self._download = None
             self.view.reload_textures()
             if worker.failed:
-                QMessageBox.warning(self, "惑星の画像",
+                QMessageBox.warning(self, tr("惑星の画像"),
                                     f"{worker.ok} 個の画像をダウンロードしました。\n"
                                     f"次の {len(worker.failed)} 個はダウンロードできませんでした"
                                     "（インターネット接続を確認してください）:\n"
@@ -1682,7 +1713,7 @@ class MainWindow(QMainWindow):
 
     def _about(self):
         QMessageBox.about(
-            self, "そらみ窓について",
+            self, tr("そらみ窓について"),
             f"<h3>そらみ窓（Soramado） v{__version__}</h3>"
             "<p>太陽系から宇宙の果てまでを旅する、Ubuntu 用の宇宙シミュレーター。</p>"
             "<p>作者: 飯田顕治 ／ ライセンス: MIT</p>"

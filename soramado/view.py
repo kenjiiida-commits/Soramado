@@ -27,6 +27,7 @@ from . import eclipses
 from . import nebulae as neb
 from . import events as ev
 from . import artsat
+from .i18n import EN_MODE, tr, trx
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -58,6 +59,8 @@ KM = 1.0 / astro.AU_KM
 
 def format_length(au: float) -> str:
     """長さを分かりやすい単位で表す（km・AU・光年）。"""
+    if EN_MODE:
+        return _format_length_en(au)
     if au < 0.1:
         km = au * astro.AU_KM
         return f"{km / 1e4:,.1f} 万km" if km >= 1e4 else f"{km:,.0f} km"
@@ -69,6 +72,19 @@ def format_length(au: float) -> str:
     if ly < 1e8:
         return f"{ly / 1e4:,.1f} 万光年" if ly < 1e5 else f"{ly / 1e4:,.0f} 万光年"
     return f"{ly / 1e8:,.1f} 億光年"
+
+
+def _format_length_en(au: float) -> str:
+    if au < 0.1:
+        return f"{au * astro.AU_KM:,.0f} km"
+    ly = au / gx.LY_AU
+    if ly < 0.1:
+        return f"{au:,.1f} AU" if au < 100 else f"{au:,.0f} AU"
+    if ly < 1e6:
+        return f"{ly:,.1f} ly" if ly < 100 else f"{ly:,.0f} ly"
+    if ly < 1e9:
+        return f"{ly / 1e6:,.1f} million ly"
+    return f"{ly / 1e9:,.1f} billion ly"
 
 
 def _smooth(a, b, x):
@@ -250,7 +266,7 @@ class SpaceView(QOpenGLWidget):
 
         # 地上モード（プラネタリウム）
         self.ground = False
-        self.place = "大阪"
+        self.place = tr("大阪")
         self.lat, self.lon = 34.69, 135.50
         self.g_az = math.radians(180.0)     # 見ている方位（北=0、東=90度）
         self.g_alt = math.radians(30.0)     # 見ている高度
@@ -1639,7 +1655,7 @@ class SpaceView(QOpenGLWidget):
             painter.setPen(QPen(QColor(0, 0, 0, 180)))
             painter.drawText(QPointF(x + off + 1, y - off * 0.3 + 1), b.name)
             painter.setPen(QPen(col.lighter(130) if b.key == self.target else col))
-            painter.drawText(QPointF(x + off, y - off * 0.3), b.name if not far else "太陽（太陽系）")
+            painter.drawText(QPointF(x + off, y - off * 0.3), b.name if not far else tr("太陽（太陽系）"))
 
         # 大きな天体の円の中には、ほかの名前（星・彗星など）を置かない
         for _k, dx, dy, dr, _dd in discs:
@@ -1656,9 +1672,9 @@ class SpaceView(QOpenGLWidget):
             pr = self._project(top, viewproj, w, h)
             if pr:
                 painter.setPen(QPen(QColor(255, 200, 150)))
-                rect = fm.boundingRect("宇宙マイクロ波背景放射（観測できる宇宙の果て・模式図）")
+                rect = fm.boundingRect(tr("宇宙マイクロ波背景放射（観測できる宇宙の果て・模式図）"))
                 rect.moveCenter(QPointF(pr[0], pr[1] - 14).toPoint())
-                painter.drawText(rect, Qt.AlignCenter, "宇宙マイクロ波背景放射（観測できる宇宙の果て・模式図）")
+                painter.drawText(rect, Qt.AlignCenter, tr("宇宙マイクロ波背景放射（観測できる宇宙の果て・模式図）"))
                 placed.append(rect)
         if self.show_small and not self.ground and not far:
             self._draw_comet_tails(painter, rel, viewproj, w, h)
@@ -1756,8 +1772,8 @@ class SpaceView(QOpenGLWidget):
         big = QFont(font)
         big.setPointSizeF(font.pointSizeF() * 1.4)
         big.setBold(True)
-        names = [("北", 0), ("北東", 45), ("東", 90), ("南東", 135), ("南", 180), ("南西", 225),
-                 ("西", 270), ("北西", 315)]
+        names = [(tr("北"), 0), (tr("北東"), 45), (tr("東"), 90), (tr("南東"), 135), (tr("南"), 180), (tr("南西"), 225),
+                 (tr("西"), 270), (tr("北西"), 315)]
         for name, az in names:
             a = math.radians(az)
             d = math.cos(a) * north + math.sin(a) * east
@@ -1766,7 +1782,7 @@ class SpaceView(QOpenGLWidget):
                 continue
             main = len(name) == 1
             painter.setFont(big if main else font)
-            painter.setPen(QPen(QColor(255, 120, 90) if name == "北" else QColor(230, 200, 140)))
+            painter.setPen(QPen(QColor(255, 120, 90) if name == tr("北") else QColor(230, 200, 140)))
             rect = painter.fontMetrics().boundingRect(name)
             rect.moveCenter(QPointF(pr[0], min(pr[1] + 18, h - 12)).toPoint())
             painter.drawText(rect, Qt.AlignCenter, name)
@@ -1848,16 +1864,17 @@ class SpaceView(QOpenGLWidget):
         if self.ground:
             alt = math.degrees(self.g_alt)
             az = math.degrees(self.g_az) % 360
-            dirs = ["北", "北北東", "北東", "東北東", "東", "東南東", "南東", "南南東",
-                    "南", "南南西", "南西", "西南西", "西", "西北西", "北西", "北北西"]
-            txt = (f"{self.place}　見ている方向: {dirs[int((az + 11.25) // 22.5) % 16]}"
-                   f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.0f}°" if self.g_fov >= 10 else f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {self.g_fov:.2g}°")
+            dirs = [tr("北"), tr("北北東"), tr("北東"), tr("東北東"), tr("東"), tr("東南東"), tr("南東"), tr("南南東"),
+                    tr("南"), tr("南南西"), tr("南西"), tr("西南西"), tr("西"), tr("西北西"), tr("北西"), tr("北北西")]
+            fov = f"{self.g_fov:.0f}" if self.g_fov >= 10 else f"{self.g_fov:.2g}"
+            txt = trx(f"{self.place}　見ている方向: {dirs[int((az + 11.25) // 22.5) % 16]}"
+                      f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {fov}°")
             painter.setPen(QPen(QColor(200, 205, 215)))
             painter.drawText(QPointF(12, h - 12), txt)
             return
         width_au = 2 * self.dist * math.tan(math.radians(self._fov) / 2) * w / h
         painter.setPen(QPen(QColor(170, 180, 200)))
-        painter.drawText(QPointF(12, h - 12), "画面の横幅 約 " + format_length(width_au))
+        painter.drawText(QPointF(12, h - 12), tr("画面の横幅 約 ") + format_length(width_au))
 
     def _draw_artsats(self, painter, viewproj, w, h, placed, fm):
         """人工衛星（宇宙から見るときは地球のまわりに、地上から見るときは空に）。"""
@@ -1888,7 +1905,7 @@ class SpaceView(QOpenGLWidget):
                 self._screen[f"s:{i}"] = (pr[0], pr[1], 8.0)
                 if s.featured:
                     painter.setPen(QPen(QColor(150, 230, 255) if bright else QColor(140, 150, 160)))
-                    txt = s.ja + ("" if bright else "（影の中・明るい空で見えない）")
+                    txt = s.ja + ("" if bright else tr("（影の中・明るい空で見えない）"))
                     painter.drawText(QPointF(pr[0] + 8, pr[1] - 6), txt)
             return
         # 宇宙から：地球の近く（約60万km以内）にいるときだけ
@@ -1971,7 +1988,7 @@ class SpaceView(QOpenGLWidget):
                     x, y = pr[0], pr[1]
                     painter.drawLine(QPointF(x - 7, y), QPointF(x + 7, y))
                     painter.drawLine(QPointF(x, y - 7), QPointF(x, y + 7))
-                    label = f"{sh.name}の放射点"
+                    label = f"{sh.name} radiant" if EN_MODE else f"{sh.name}の放射点"
                     placed.append(fm.boundingRect(label).translated(int(x + 10), int(y - 6)))
                     painter.drawText(QPointF(x + 10, y - 6), label)
             if alt <= 0 or dark < 0.5:

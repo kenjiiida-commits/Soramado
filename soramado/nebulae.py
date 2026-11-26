@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from . import astro
+from .i18n import EN_MODE
 
 LY_AU = 63241.077
 ARCMIN = math.pi / (180 * 60)
@@ -53,6 +54,7 @@ class Nebula:
     ly: float
     note: str
     const: str
+    name_en: str = ""
     pos: np.ndarray = None       # 太陽中心・黄道座標 [AU]
     radius_au: float = 0.0       # 実際の大きさ（半径）[AU]
     axes: tuple = None           # 見かけの形に合わせた軸（長軸・短軸・視線）
@@ -69,6 +71,8 @@ def _load() -> list[Nebula]:
     out = []
     for d in json.loads(path.read_text(encoding="utf-8")):
         n = Nebula(**d)
+        if EN_MODE and n.name_en:
+            n.name = n.name_en
         ra, dec = math.radians(n.ra), math.radians(n.dec)
         u_eq = np.array([math.cos(dec) * math.cos(ra), math.cos(dec) * math.sin(ra), math.sin(dec)])
         east_eq = np.array([-math.sin(ra), math.cos(ra), 0.0])
@@ -167,6 +171,12 @@ def vertex_data(n: Nebula) -> np.ndarray:
         if n.id == "NGC1952":                             # かに星雲の中心の青白い光（シンクロトロン放射）
             add(rng.normal(0, 0.25, (20, 3)), [0.10, 0.14, 0.22], R * 0.35)
     return np.concatenate(parts).astype(np.float32)
+
+
+TYPE_EN = {"ocl": "Open cluster", "gcl": "Globular cluster", "emn": "Emission nebula", "rfn": "Reflection nebula",
+           "pn": "Planetary nebula", "snr": "Supernova remnant"}
+if EN_MODE:
+    TYPE_JA = TYPE_EN
 
 
 def describe(n: Nebula) -> list[str]:

@@ -59,6 +59,15 @@ SHOWERS = [
     Shower("urs", "こぐま座流星群", 270.7, 217.0, 76.0, 10, 33, 1.0, "タットル彗星（8P）",
            "冬至のころの流星群。放射点が北の空高くにあり、一晩中見られる。"),
 ]
+def _english_names():
+    from .i18n import EN_MODE, SHOWERS_EN, SHOWER_PARENTS_EN
+    if EN_MODE:
+        for sh in SHOWERS:
+            object.__setattr__(sh, "name", SHOWERS_EN.get(sh.key, sh.name))
+            object.__setattr__(sh, "parent", SHOWER_PARENTS_EN.get(sh.key, sh.parent))
+
+
+_english_names()
 BY_KEY = {s.key: s for s in SHOWERS}
 
 
@@ -114,6 +123,10 @@ class ShowerNight:
 
     @property
     def condition(self) -> str:
+        from .i18n import tr
+        return tr(self._condition())
+
+    def _condition(self) -> str:
         if self.jd_best is None:
             return "観測地では見えない（放射点が昇らない）"
         if self.moon_alt > 0 and self.moon_illum > 0.6:
@@ -174,6 +187,12 @@ def _night(sh: Shower, peak: float, obs) -> ShowerNight:
 PLANETS = [("mercury", "水星", "Mercury"), ("venus", "金星", "Venus"), ("mars", "火星", "Mars"),
            ("jupiter", "木星", "Jupiter"), ("saturn", "土星", "Saturn")]
 JA = {k: j for k, j, _ in PLANETS} | {"moon": "月"}
+EN = {k: e for k, _, e in PLANETS} | {"moon": "Moon"}
+
+
+def _t(ja: str, en: str) -> str:
+    from .i18n import EN_MODE
+    return en if EN_MODE else ja
 
 
 @dataclass
@@ -238,8 +257,8 @@ def find_events(jd_start: float, days: float, lat: float, lon: float) -> list[Ev
                     tm = _refine_min(lambda x: _sep(a, b, x), t - 1, 1.0)
                     sm = _sep(a, b, tm)
                     if sm < 2.0:
-                        out.append(Event(tm, "conj", f"{JA[a]}と{JA[b]}が接近", (a, b),
-                                         f"{sm:.1f}°まで近づく", sm))
+                        out.append(Event(tm, "conj", _t(f"{JA[a]}と{JA[b]}が接近", f"{EN[a]} – {EN[b]} conjunction"),
+                                         (a, b), _t(f"{sm:.1f}°まで近づく", f"{sm:.1f}° apart"), sm))
                 prev2, prev = prev, s
                 t += 1.0
     # 月と惑星（地心で4度以内）
@@ -253,7 +272,8 @@ def find_events(jd_start: float, days: float, lat: float, lon: float) -> list[Ev
                 sm = _sep("moon", a, tm)
                 if sm < 4.0:
                     kind = "occult" if sm < 0.9 else "conj"     # 地球のどこかで惑星食になるかもしれない
-                    out.append(Event(tm, kind, f"月と{JA[a]}が接近", ("moon", a), f"{sm:.1f}°まで近づく（地心）", sm))
+                    out.append(Event(tm, kind, _t(f"月と{JA[a]}が接近", f"Moon – {EN[a]} conjunction"), ("moon", a),
+                                     _t(f"{sm:.1f}°まで近づく（地心）", f"{sm:.1f}° apart (geocentric)"), sm))
             prev2, prev = prev, s
             t += 0.125
     # 外惑星の衝（太陽の反対側に来て、一晩中見える見ごろ）
@@ -265,8 +285,9 @@ def find_events(jd_start: float, days: float, lat: float, lon: float) -> list[Ev
             if prev is not None and prev2 is not None and prev > prev2 and prev >= e and prev > 150:
                 tm = _refine_min(lambda x: -_elong(a, x), t - 2, 2.0)
                 b = _body(a, tm)
-                out.append(Event(tm, "opposition", f"{JA[a]}が衝（見ごろ）", (a,),
-                                 f"一晩中見える。明るさ {b.mag:.1f} 等、地球から {b.earth_distance:.2f} AU"))
+                out.append(Event(tm, "opposition", _t(f"{JA[a]}が衝（見ごろ）", f"{EN[a]} at opposition"), (a,),
+                                 _t(f"一晩中見える。明るさ {b.mag:.1f} 等、地球から {b.earth_distance:.2f} AU",
+                                    f"Visible all night. Magnitude {b.mag:.1f}, {b.earth_distance:.2f} AU from Earth")))
             prev2, prev = prev, e
             t += 2.0
     # 内惑星の最大離角（夕方・明け方に見やすい）
@@ -280,8 +301,9 @@ def find_events(jd_start: float, days: float, lat: float, lon: float) -> list[Ev
                 sun, b = _body("sun", tm), _body(a, tm)
                 east = ((float(b.ra) - float(sun.ra) + math.pi) % (2 * math.pi) - math.pi) > 0
                 when = "東方最大離角（夕方の西の空）" if east else "西方最大離角（明け方の東の空）"
-                out.append(Event(tm, "elong", f"{JA[a]}が{when}", (a,),
-                                 f"太陽から {_elong(a, tm):.0f}° 離れる", 0.0))
+                when_en = "greatest eastern elongation (evening)" if east else "greatest western elongation (morning)"
+                out.append(Event(tm, "elong", _t(f"{JA[a]}が{when}", f"{EN[a]} at {when_en}"), (a,),
+                                 _t(f"太陽から {_elong(a, tm):.0f}° 離れる", f"{_elong(a, tm):.0f}° from the Sun"), 0.0))
             prev2, prev = prev, e
             t += 1.0
     out = [e for e in out if jd_start <= e.jd <= jd_start + days]

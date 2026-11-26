@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .i18n import EN_MODE
+
 from . import astro
 from .starnames import JA_NAMES, greek
 
@@ -76,9 +78,9 @@ class StarCatalog:
                 pts = [_radec_vec(ra, dec) for ra, dec in line]
                 segs += [(a, b) for a, b in zip(pts, pts[1:])]
             self.constellations.append(Constellation(
-                c["id"], c["ja"], _radec_vec(c["ra"], c["dec"]),
+                c["id"], c["en"] if EN_MODE else c["ja"], _radec_vec(c["ra"], c["dec"]),
                 np.array(segs, dtype=np.float64).reshape(-1, 2, 3)))
-            self.con_names[c["id"]] = c["ja"]
+            self.con_names[c["id"]] = c["en"] if EN_MODE else c["ja"]
 
         # 名前を表示する星（固有名のある明るい星）
         self.labeled = [i for i in range(min(self.count, 3000))
@@ -99,15 +101,19 @@ class StarCatalog:
     def short_name(self, i: int) -> str:
         p = str(self.proper[i])
         if p:
-            return JA_NAMES.get(p, p)
+            return p if EN_MODE else JA_NAMES.get(p, p)
         return self.designation(i)
 
     def designation(self, i: int) -> str:
         con = str(self.con[i])
         cname = self.con_names.get(con, con)
         b, f = str(self.bayer[i]), str(self.flam[i])
+        if b and EN_MODE:
+            return f"{greek(b)} {cname}"
         if b:
             return f"{cname}{greek(b)}星"
+        if f and EN_MODE:
+            return f"{f} {cname}"
         if f:
             return f"{cname}{f}番星"
         if self.hip[i]:
@@ -119,7 +125,7 @@ class StarCatalog:
         desig = self.designation(i)
         if self.proper[i] and desig not in parts[0]:
             parts.append(desig)
-        parts.append(f"{self.mag[i]:.2f} 等（地球から見た明るさ）")
+        parts.append(f"{self.mag[i]:.2f} mag (from Earth)" if EN_MODE else f"{self.mag[i]:.2f} 等（地球から見た明るさ）")
         d = self.dist_pc[i]
         if d < UNKNOWN_DIST_PC:
             ly = d * PC_LY

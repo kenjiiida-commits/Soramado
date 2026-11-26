@@ -53,6 +53,9 @@ class ArtSat:
 
     @property
     def ja(self) -> str:
+        from .i18n import EN_MODE, NAMES_EN
+        if EN_MODE:
+            return NAMES_EN.get(f"s:{self.num}", self.name.title())
         return FEATURED.get(self.num, (self.name.title(), ""))[0]
 
     @property

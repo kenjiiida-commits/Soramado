@@ -74,6 +74,17 @@ def _add_small_bodies():
 
 _add_small_bodies()
 
+
+def _english_names():
+    from .i18n import EN_MODE, name_en
+    if not EN_MODE:
+        return
+    for b in BODIES:
+        object.__setattr__(b, "name", name_en(b.key, b.name))
+
+
+_english_names()
+
 BY_KEY = {b.key: b for b in BODIES}
 
 # 画像ファイルの入手先（Solar System Scope、CC BY 4.0）

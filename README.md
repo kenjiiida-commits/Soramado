@@ -5,6 +5,10 @@ Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
 
 > このソフトは国立天文台の Mitaka とは関係のない、独自に作ったソフトです。
 
+**English:** Soramado is a Mitaka-like 3D space simulator for Ubuntu. The menus, toolbar, status bar,
+labels and event tables can be shown in English: choose **View → 言語 / Language → English** and restart.
+(Object descriptions, tour captions and the manual are currently Japanese only.)
+
 ## できること
 
 **宇宙を旅する**
@@ -39,6 +43,7 @@ Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
 - 画面を画像で保存（Ctrl+S）、動画で録画（Ctrl+R。ツアーを1本の動画にもできる）
 - 前回の表示を覚えて次回に復元、止まっているときは描き直さない（省電力）
 - 日本語の説明書（F1）
+- 画面の英語表示（「表示」→「言語 / Language」。メニュー・ボタン・天体名・一覧を英語に。解説文・ツアーの字幕・説明書は日本語のまま）
 
 ## 動作環境
 

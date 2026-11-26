@@ -34,6 +34,10 @@ class Eclipse:
 
     @property
     def type_ja(self) -> str:
+        from .i18n import tr
+        return tr(self._type_ja())
+
+    def _type_ja(self) -> str:
         if self.kind == "lunar":
             return {"total": "皆既月食", "partial": "部分月食", "penumbral": "半影月食"}[self.type]
         return {"total": "皆既日食", "annular": "金環日食", "hybrid": "金環皆既日食",

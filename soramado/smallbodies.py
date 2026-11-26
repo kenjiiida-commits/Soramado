@@ -120,3 +120,13 @@ def add_positions(pos: dict, jd: float) -> dict:
     for b in SMALL_BODIES:
         pos[b.key] = position(b, jd)
     return pos
+
+
+def _english_names():
+    from .i18n import EN_MODE, name_en
+    if EN_MODE:
+        for x in SMALL_BODIES:
+            object.__setattr__(x, "name", name_en(x.key, x.name))
+
+
+_english_names()
