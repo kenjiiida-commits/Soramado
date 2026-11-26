@@ -1918,7 +1918,7 @@ class SpaceView(QOpenGLWidget):
         zen = self._gframe[0]
         sn = max(float(np.dot(np.asarray(rel, float) / max(np.linalg.norm(rel), 1e-30), zen)), 0.0)
         X = min(1.0 / (sn + 0.025 * math.exp(-11.0 * sn)), 30.0)
-        t = np.exp(-(X - 1.0) * np.array([0.08, 0.12, 0.22]))
+        t = np.exp(-(X - 1.0) * np.array([0.05, 0.08, 0.14]))
         m = max(float(t[0]), 1e-4)
         return t / m * m ** 0.2            # シェーダーの atmTransmit と同じ
 

@@ -49,7 +49,7 @@ float atmAirmass(vec3 dir) {
 vec3 atmTransmit(vec3 dir) {
     if (u_atm < 0.5) return vec3(1.0);
     float X = min(atmAirmass(dir), 30.0);
-    vec3 t = exp(-(X - 1.0) * vec3(0.08, 0.12, 0.22));
+    vec3 t = exp(-(X - 1.0) * vec3(0.05, 0.08, 0.14));
     float m = max(t.r, 1e-4);
     return t / m * pow(m, 0.2);
 }
