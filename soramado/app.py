@@ -1519,6 +1519,19 @@ class MainWindow(QMainWindow):
         elif kind == "go:ecl":
             self._go_eclipse(g.eclipses[int(parts[2])], True)
 
+    def _on_panel_link(self, url):
+        href = url.toString()
+        if href.startswith("http"):
+            QDesktopServices.openUrl(url)
+            return
+        if href.startswith("jd:"):
+            v = self.view
+            v.paused = True
+            v.set_jd(float(href[3:]))
+            v.dist = max(v.dist, v._default_dist(v.target) * 0.5)
+            self._refresh_ui()
+            self._update_panel(force=True)
+
     def _go_shower(self, n):
         v = self.view
         jd = n.jd_best or n.jd_peak
@@ -1717,6 +1730,8 @@ class MainWindow(QMainWindow):
         self.panel = QDockWidget(tr("解説"), self)
         self.panel.setObjectName("panel")
         self.panel_text = QTextBrowser()
+        self.panel_text.setOpenLinks(False)
+        self.panel_text.anchorClicked.connect(self._on_panel_link)
         self.panel_text.setOpenExternalLinks(True)
         self.panel_text.setMinimumWidth(260)
         self.panel.setWidget(self.panel_text)
@@ -1769,11 +1784,16 @@ class MainWindow(QMainWindow):
                 html.append(f"<p>{KIND_DESCRIPTIONS.get(int(v.gcat.kind[i]), '')}</p>")
             elif t in crafts.BY_KEY:
                 sc = crafts.BY_KEY[t]
-                html.append(f"<h2>🛰 {sc.name}</h2><p>{sc.note}</p><h3>おもなできごと</h3><ul>")
+                html.append(f"<h2>🛰 {sc.name}</h2><p>{sc.note}</p><h3>おもなできごと</h3>")
+                t0, t1 = crafts.span(sc)
+                if not (t0 <= v.jd <= t1):
+                    html.append("<p style='color:#c96'>" + tr("いまの日付では、この探査機は飛んでいません。") + "</p>")
+                html.append("<p style='color:#888'>" + tr("できごとを押すと、その日へ移ります。") + "</p><ul>")
                 for jd_e, txt in sc.events:
                     d = astro.datetime_from_jd(jd_e)
                     mark = "✔ " if jd_e <= v.jd else ""
-                    html.append(f"<li>{mark}{d.year}年{d.month}月{d.day}日　{txt}</li>")
+                    date = f"{d:%Y-%m-%d}" if EN_MODE else f"{d.year}年{d.month}月{d.day}日"
+                    html.append(f"<li>{mark}<a href='jd:{jd_e + 0.5}'>{date}</a>　{txt}</li>")
                 html.append("</ul><p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
             elif v.is_artsat(t):
                 sa = v.artsats[int(t[2:])]

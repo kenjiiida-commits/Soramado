@@ -316,6 +316,8 @@ EN.update({
     "◀ 過去へ動かす": "◀ Into the past", "止める": "Stop", "未来へ動かす ▶": "Into the future ▶", "今に戻す": "Back to now",
     "見る星座:": "Constellation:", "明るい星の動いた跡を線で出す": "Show the paths of bright stars", "今の星の位置": "Star positions today",
     "大気の効果（地上モード：浮き上がり・減光・空の色）": "Atmosphere (ground mode: refraction, extinction, sky colour)",
+    "いまの日付では、この探査機は飛んでいません。": "The spacecraft is not flying on the current date.",
+    "できごとを押すと、その日へ移ります。": "Click an event to jump to that date.",
     "地上の風景": "Landscape", "自分の360°写真を読み込む…": "Load my own 360° photo…",
     "風景は「地上から見る」のときに出ます": "The landscape appears in \"View from ground\"",
     "360°写真（正距円筒図）を選ぶ": "Choose a 360° photo (equirectangular)", "画像 (*.png *.jpg *.jpeg *.webp)": "Images (*.png *.jpg *.jpeg *.webp)",
