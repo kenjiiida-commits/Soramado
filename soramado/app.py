@@ -376,6 +376,10 @@ class MainWindow(QMainWindow):
 
         m_view.addSeparator()
         m_view.addAction(self.panel.toggleViewAction())
+        act_ep = QAction(tr("星座の形の変化（星の動き）…"), self)
+        act_ep.setShortcut(QKeySequence("Ctrl+Y"))
+        act_ep.triggered.connect(self._show_epoch_panel)
+        m_view.addAction(act_ep)
         m_lang = m_view.addMenu("言語 / Language")
         from PySide6.QtGui import QActionGroup
         grp = QActionGroup(self)
@@ -1108,6 +1112,129 @@ class MainWindow(QMainWindow):
             "流星は放射点から四方へ飛ぶので、放射点だけでなく空全体を広く見るのがこつです。\n"
             "「地上から見る」で、見やすい時刻の空に流星が流れます（流れる数は実際の約10倍に増やしています）。",
             go)
+
+    # ---------------------------------------------------------- 星座の形の変化（星の動き）
+
+    def _show_epoch_panel(self):
+        if getattr(self, "_ep_dlg", None) is not None:
+            self._ep_dlg.raise_()
+            self._ep_dlg.activateWindow()
+            return
+        v = self.view
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("星座の形の変化"))
+        dlg.resize(560, 300)
+        lay = QVBoxLayout(dlg)
+        lab = QLabel(tr("星は1つ1つが、それぞれの向きと速さで宇宙を動いています。近くの星ほど、空の上で大きく動きます。\n"
+                        "時代を変えると、星の位置だけが動いて、星座の形が変わっていくのを見られます（惑星や時計は変わりません）。"))
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
+        val = QLabel()
+        f = val.font()
+        f.setPointSizeF(f.pointSizeF() * 1.5)
+        f.setBold(True)
+        val.setFont(f)
+        val.setAlignment(Qt.AlignCenter)
+        lay.addWidget(val)
+        sl = QSlider(Qt.Horizontal)
+        sl.setRange(-200, 200)          # 1目もり = 1000年
+        sl.setValue(int(round(v.stars.epoch / 1000)))
+        sl.setTickPosition(QSlider.TicksBelow)
+        sl.setTickInterval(50)
+        lay.addWidget(sl)
+        ends = QHBoxLayout()
+        ends.addWidget(QLabel(tr("20万年前")))
+        ends.addStretch(1)
+        ends.addWidget(QLabel(tr("今")))
+        ends.addStretch(1)
+        ends.addWidget(QLabel(tr("20万年後")))
+        lay.addLayout(ends)
+        row = QHBoxLayout()
+        b_back = QPushButton(tr("◀ 過去へ動かす"))
+        b_stop = QPushButton(tr("止める"))
+        b_fwd = QPushButton(tr("未来へ動かす ▶"))
+        b_now = QPushButton(tr("今に戻す"))
+        for b in (b_back, b_stop, b_fwd, b_now):
+            row.addWidget(b)
+        lay.addLayout(row)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel(tr("見る星座:")))
+        cb = QComboBox()
+        names = sorted(((c.name, i) for i, c in enumerate(v.stars.constellations)
+                        if "見えない" not in CON_INFO.get(c.id, ("",))[0]), key=lambda t: t[0])
+        favs = ["UMa", "Ori", "Cas", "Sco", "Leo", "Cyg"]
+        idx = {c.id: i for i, c in enumerate(v.stars.constellations)}
+        for cid in favs:
+            if cid in idx:
+                cb.addItem(v.stars.constellations[idx[cid]].name, idx[cid])
+        cb.insertSeparator(cb.count())
+        for name, i in names:
+            cb.addItem(name, i)
+        row2.addWidget(cb, 1)
+        b_look = QPushButton(tr("地上から見る"))
+        row2.addWidget(b_look)
+        lay.addLayout(row2)
+        chk = QCheckBox(tr("明るい星の動いた跡を線で出す"))
+        chk.setChecked(v.show_star_trails)
+        chk.toggled.connect(lambda on: (setattr(v, "show_star_trails", on), v.update()))
+        lay.addWidget(chk)
+        timer = QTimer(dlg)
+        step = [0]
+
+        def show_val(k):
+            y = k * 1000
+            if y == 0:
+                val.setText(tr("今の星の位置"))
+            elif EN_MODE:
+                val.setText(f"{abs(y):,} years {'from now' if y > 0 else 'ago'}")
+            else:
+                val.setText(f"{abs(y):,} 年{'後' if y > 0 else '前'}")
+
+        def on_slider(k):
+            show_val(k)
+            v.set_star_epoch(k * 1000.0)
+
+        def tick():
+            k = sl.value() + step[0]
+            if k > sl.maximum() or k < sl.minimum():
+                timer.stop()
+                return
+            sl.setValue(k)
+
+        def play(d):
+            step[0] = d
+            timer.start(80)
+
+        sl.valueChanged.connect(on_slider)
+        timer.timeout.connect(tick)
+        b_back.clicked.connect(lambda: play(-1))
+        b_fwd.clicked.connect(lambda: play(1))
+        b_stop.clicked.connect(timer.stop)
+        b_now.clicked.connect(lambda: (timer.stop(), sl.setValue(0)))
+        b_look.clicked.connect(lambda: self._look_constellation(cb.currentData()))
+        show_val(sl.value())
+        dlg.finished.connect(lambda *_: (timer.stop(), setattr(self, "_ep_dlg", None)))
+        self._ep_dlg = dlg
+        dlg.setModal(False)
+        dlg.show()
+
+    def _look_constellation(self, ci):
+        """その星座が夜10時ごろ高く見える日（これから1年のうち）の空を、地上から見る。"""
+        if ci is None:
+            return
+        v = self.view
+        c = v.stars.constellations[int(ci)]
+        now = datetime.now().astimezone().replace(hour=22, minute=0, second=0, microsecond=0)
+        best, best_alt = None, -90.0
+        for d in range(0, 366, 3):
+            jd = astro.jd_from_datetime(now + timedelta(days=d))
+            _off, zen, north, east = astro.observer_frame(jd, v.lat, v.lon)
+            alt, _az = astro.alt_az(np.asarray(c.center), zen, north, east)
+            if alt > best_alt:
+                best, best_alt = jd, alt
+        self._ground_at(best)
+        v.look_dir(c.center, fov=75.0)
+        v.select_con(int(ci))
 
     # ---------------------------------------------------------- 今夜の空ガイド
 

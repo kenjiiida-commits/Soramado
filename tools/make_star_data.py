@@ -28,6 +28,7 @@ def main(hyg_csv, cons_json, lines_json):
     OUT.mkdir(parents=True, exist_ok=True)
     xs, ys, zs, mags, cis = [], [], [], [], []
     hips, dists, propers, bayers, flams, cons, spects = [], [], [], [], [], [], []
+    vels = []
     with open(hyg_csv, newline="") as fp:
         for r in csv.DictReader(fp):
             if r["proper"] == "Sol":
@@ -48,6 +49,8 @@ def main(hyg_csv, cons_json, lines_json):
             flams.append(r["flam"])
             cons.append(r["con"])
             spects.append(r["spect"][:12])
+            # 空間速度（赤道座標・パーセク/年）。星座の形が変わる様子を見るのに使う
+            vels.append([float(r["vx"] or 0), float(r["vy"] or 0), float(r["vz"] or 0)])
     order = np.argsort(mags)   # 明るい順に並べておく
     pick = lambda a, dt: np.asarray(a, dtype=dt)[order]  # noqa: E731
     np.savez_compressed(
@@ -56,6 +59,7 @@ def main(hyg_csv, cons_json, lines_json):
         mag=pick(mags, np.float32), ci=pick(cis, np.float32), dist=pick(dists, np.float32),
         hip=pick(hips, np.int32), proper=pick(propers, "U24"), bayer=pick(bayers, "U6"),
         flam=pick(flams, "U4"), con=pick(cons, "U4"), spect=pick(spects, "U12"),
+        vel=np.asarray(vels, dtype=np.float32)[order],
     )
 
     names = {}

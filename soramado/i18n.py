@@ -303,6 +303,14 @@ EN.update({
     "天の川の写真（Gaia）をダウンロード…": "Download the Milky Way photo (Gaia)…",
     "天の川を写真で表示（ダウンロードしたもの）": "Show the Milky Way photo (downloaded)",
     "天の川の写真": "Milky Way photo",
+    "星座の形の変化（星の動き）…": "Changing constellations (star motions)…", "星座の形の変化": "Changing constellations",
+    "星は1つ1つが、それぞれの向きと速さで宇宙を動いています。近くの星ほど、空の上で大きく動きます。\n"
+    "時代を変えると、星の位置だけが動いて、星座の形が変わっていくのを見られます（惑星や時計は変わりません）。":
+    "Every star moves through space in its own direction and speed; nearby stars move most across the sky.\n"
+    "Change the era to move only the stars and watch the constellations change shape (planets and the clock stay as they are).",
+    "20万年前": "200,000 years ago", "今": "Now", "20万年後": "200,000 years ahead",
+    "◀ 過去へ動かす": "◀ Into the past", "止める": "Stop", "未来へ動かす ▶": "Into the future ▶", "今に戻す": "Back to now",
+    "見る星座:": "Constellation:", "明るい星の動いた跡を線で出す": "Show the paths of bright stars", "今の星の位置": "Star positions today",
     "今夜の空ガイド…": "Tonight's sky guide…", "今夜の空ガイド": "Tonight's sky guide",
     "◀ 前の夜": "◀ Previous night", "今夜": "Tonight", "次の夜 ▶": "Next night ▶",
     "そらみ窓を起動したときに、今夜の空ガイドを出す": "Show tonight's sky guide when Soramado starts",

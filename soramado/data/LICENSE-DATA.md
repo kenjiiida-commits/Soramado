@@ -10,7 +10,7 @@ HYG データベース v4.1（David Nash / Astronexus）を、そらみ窓で使
 ライセンス: Creative Commons Attribution-ShareAlike 4.0 International（CC BY-SA 4.0）
 <https://creativecommons.org/licenses/by-sa/4.0/>
 
-変換の内容: 太陽を除き、位置（赤経・赤緯・距離）を直交座標に直し、明るい順に並べ替えた。
+変換の内容: 太陽を除き、位置（赤経・赤緯・距離）を直交座標に直し、空間速度（vx, vy, vz）を加えて、明るい順に並べ替えた。
 変換に使ったプログラムは `tools/make_star_data.py` です。
 この変換後のデータも CC BY-SA 4.0 で提供します。
 

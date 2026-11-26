@@ -261,6 +261,8 @@ class SpaceView(QOpenGLWidget):
         self.show_nebulae = True
         self.show_photos = True
         self.show_mwphoto = True
+        self.show_star_trails = True   # 星の位置の時代を変えたとき、今の位置からの動きを線で出す
+        self.m_trails = None
         self.mw_level = 2              # 天の川の明るさ（0 控えめ 〜 3 とても明るい）
         self._mw_w = 0.0               # 天の川の写真の濃さ（模式図の天の川銀河はその分だけ薄くする）
         self._photo_w = {}             # 天体ごとの写真の濃さ（0〜1）。模式図はその分だけ薄くする
@@ -1163,6 +1165,36 @@ class SpaceView(QOpenGLWidget):
         self.m_full.draw(f)
         p.release()
 
+    # ---------------------------------------------------------- 星の位置の時代（固有運動）
+
+    def set_star_epoch(self, years: float):
+        """星の位置だけを、今から years 年後にする（惑星や時計は変えない）。"""
+        years = float(years)
+        if years == self.stars.epoch:
+            return
+        self.stars.set_epoch(years)
+        self.makeCurrent()
+        self.m_stars.update(self.stars.vertex_data())
+        self.m_conlines.update(self.stars.line_vertices())
+        self._con_sel_i = -2                      # 選んだ星座の線も作り直す
+        # 明るい星の動いた跡（今の位置 → その時代の位置）
+        n = int(np.searchsorted(self.stars._mag0, 4.0))
+        if years != 0.0 and n > 0:
+            a = self.stars._pos0[:n] / np.maximum(self.stars._dist0[:n], 1e-9)[:, None]
+            b = self.stars.dir[:n]
+            # 大きく動く星もあるので、空の上の弧（大円）として細かく区切って描く
+            k = 12
+            t = np.linspace(0.0, 1.0, k + 1)[None, :, None]
+            pts = a[:, None, :] * (1 - t) + b[:, None, :] * t
+            pts /= np.maximum(np.linalg.norm(pts, axis=2, keepdims=True), 1e-9)
+            segs = np.stack([pts[:, :-1], pts[:, 1:]], axis=2).reshape(-1, 3).astype(np.float32)
+            if self.m_trails is None:
+                self.m_trails = _Mesh(segs, [(0, 3)], GL_LINES)
+            else:
+                self.m_trails.update(segs)
+        self.doneCurrent()
+        self.update()
+
     def reload_exo(self):
         self.exo = exo.load()
         self._exo_orbits = {}
@@ -1644,7 +1676,7 @@ class SpaceView(QOpenGLWidget):
             self.m_conlines.draw(f)
             if self.selected_con >= 0:
                 if self._con_sel_i != self.selected_con:
-                    segs = self.stars.constellations[self.selected_con].segments.reshape(-1, 3).astype(np.float32)
+                    segs = self.stars.segments_at_epoch(self.selected_con).reshape(-1, 3).astype(np.float32)
                     if self.m_con_sel is None:
                         self.m_con_sel = _Mesh(segs, [(0, 3)], GL_LINES)
                     else:
@@ -1653,6 +1685,16 @@ class SpaceView(QOpenGLWidget):
                 kk = max(k, 0.6)
                 p.setUniformValue("u_color", QVector4D(0.35 * kk, 0.65 * kk, 1.0 * kk, 1.0))
                 self.m_con_sel.draw(f)
+            p.release()
+        if self.show_star_trails and self.m_trails is not None and self.stars.epoch != 0.0:
+            p = self.p_line
+            p.bind()
+            self._common(p, viewproj)
+            p.setUniformValue("u_offset", QVector3D(0, 0, 0))
+            p.setUniformValue1f("u_scale", 1000.0)
+            k = self._con_fade * (night if self.ground else 1.0)
+            p.setUniformValue("u_color", QVector4D(0.45 * k, 0.3 * k, 0.12 * k, 1.0))
+            self.m_trails.draw(f)
             p.release()
         if self.show_stars:
             f.glEnable(GL_PROGRAM_POINT_SIZE)
@@ -2120,6 +2162,21 @@ class SpaceView(QOpenGLWidget):
 
     def _draw_scale(self, painter, w, h):
         """画面の横幅がどれくらいの長さかを左下に出す。"""
+        ep = self.stars.epoch
+        if ep != 0.0:
+            y = abs(ep)
+            if EN_MODE:
+                txt = f"Star positions: {y:,.0f} years {'from now' if ep > 0 else 'ago'}"
+            else:
+                txt = f"星の位置：{y:,.0f} 年{'後' if ep > 0 else '前'}"
+            f0 = painter.font()
+            f1 = QFont(f0)
+            f1.setPointSizeF(f0.pointSizeF() * 1.4)
+            f1.setBold(True)
+            painter.setFont(f1)
+            painter.setPen(QPen(QColor(255, 200, 120)))
+            painter.drawText(QPointF(12, h - 40), txt)
+            painter.setFont(f0)
         if self.ground:
             alt = math.degrees(self.g_alt)
             az = math.degrees(self.g_az) % 360

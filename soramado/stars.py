@@ -68,6 +68,16 @@ class StarCatalog:
         self.con = d["con"]
         self.spect = d["spect"]
         self.count = len(self.mag)
+        # 空間速度（黄道座標・パーセク/年）。古いデータファイルにはないので 0 にする
+        if "vel" in d.files:
+            ve = d["vel"].astype(np.float64)
+            self.vel = np.stack([ve[:, 0], c * ve[:, 1] + s * ve[:, 2], -s * ve[:, 1] + c * ve[:, 2]], axis=1)
+            self.vel[self.dist_pc >= UNKNOWN_DIST_PC] = 0.0
+        else:
+            self.vel = np.zeros_like(ecl)
+        self.epoch = 0.0                         # 星の位置の時代（今から何年後か）
+        self._pos0, self._dist0, self._mag0 = self.pos_pc.copy(), self.dist_pc.copy(), self.mag.copy()
+        self._line_stars = None
 
         cj = json.load(open(DATA_DIR / "constellations.json", encoding="utf-8"))
         self.constellations: list[Constellation] = []
@@ -86,6 +96,47 @@ class StarCatalog:
         self.labeled = [i for i in range(min(self.count, 3000))
                         if str(self.proper[i]) in JA_NAMES and self.mag[i] < 4.5]
 
+    def set_epoch(self, years: float):
+        """星の位置を、今から years 年後（負なら前）にする。星はまっすぐ等速で動くとして計算する。"""
+        self.epoch = float(years)
+        self.pos_pc = self._pos0 + self.vel * self.epoch
+        known = self._dist0 < UNKNOWN_DIST_PC
+        dist = np.linalg.norm(self.pos_pc, axis=1)
+        self.dist_pc = np.where(known, dist, self._dist0)
+        self.dir = self.pos_pc / np.maximum(self.dist_pc, 1e-9)[:, None]
+        # 近づけば明るく、遠ざかれば暗く
+        self.mag = np.where(known, self._mag0 + 5 * np.log10(np.maximum(self.dist_pc, 1e-6) / np.maximum(self._dist0, 1e-6)),
+                            self._mag0)
+
+    def _match_line_stars(self):
+        """星座線の端の点が、どの星か（近くのいちばん明るい星）を調べておく。"""
+        n = min(self.count, 9100)                # 6.5等くらいまで
+        dirs = self._pos0[:n] / np.maximum(self._dist0[:n], 1e-9)[:, None]
+        out = []
+        for c in self.constellations:
+            pts = c.segments.reshape(-1, 3)
+            if not len(pts):
+                out.append(np.zeros(0, int))
+                continue
+            dots = pts @ dirs.T
+            best = np.argmax(dots, axis=1)
+            ok = dots[np.arange(len(pts)), best] > math.cos(math.radians(0.4))
+            out.append(np.where(ok, best, -1))
+        self._line_stars = out
+
+    def segments_at_epoch(self, ci: int) -> np.ndarray:
+        """その時代の星座線（星が動いたぶんだけ、線の端も動かす）。"""
+        c = self.constellations[ci]
+        if self.epoch == 0.0 or not len(c.segments):
+            return c.segments
+        if self._line_stars is None:
+            self._match_line_stars()
+        pts = c.segments.reshape(-1, 3).copy()
+        idx = self._line_stars[ci]
+        m = idx >= 0
+        pts[m] = self.dir[idx[m]]
+        return pts.reshape(-1, 2, 3)
+
     def vertex_data(self) -> np.ndarray:
         """GPU に送る頂点データ: 位置[AU](3), 等級(1), 太陽からの距離[AU](1), 色(3)"""
         pos_au = self.pos_pc * PC_AU
@@ -93,7 +144,7 @@ class StarCatalog:
         return np.concatenate([pos_au, self.mag[:, None], dist_au[:, None], self.rgb], axis=1).astype(np.float32)
 
     def line_vertices(self) -> np.ndarray:
-        segs = [c.segments.reshape(-1, 3) for c in self.constellations if len(c.segments)]
+        segs = [self.segments_at_epoch(i).reshape(-1, 3) for i, c in enumerate(self.constellations) if len(c.segments)]
         return np.concatenate(segs).astype(np.float32)
 
     # ---------------------------------------------------------- 名前・情報
