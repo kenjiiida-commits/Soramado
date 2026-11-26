@@ -77,7 +77,8 @@ HELP_TEXT = """<h3>操作方法</h3>
 <tr><td><b>Ctrl+S</b></td><td>画面を画像で保存（ピクチャ/Soramado）</td></tr>
 <tr><td><b>Ctrl+R</b></td><td>録画の開始・停止（ビデオ/Soramado、ffmpeg が必要）</td></tr>
 <tr><td><b>Ctrl+E</b></td><td>日食・月食の一覧</td></tr>
-<tr><td><b>Ctrl+F</b></td><td>小惑星・彗星・系外惑星を名前や番号で探す（データのダウンロードが必要）</td></tr>
+<tr><td><b>Ctrl+F</b></td><td>天体を名前で探す（星座・星雲・星団。小惑星・系外惑星はダウンロードしたとき）</td></tr>
+<tr><td><b>星座名をダブルクリック</b></td><td>星座の解説（見ごろ・見つけ方・神話）</td></tr>
 </table>
 <p><b>地上から見る（プラネタリウム）</b></p>
 <table cellpadding="3">
@@ -121,6 +122,7 @@ class MainWindow(QMainWindow):
         self.view.speed = SPEEDS[DEFAULT_SPEED][1]
         self.view.targetChanged.connect(self._on_target_changed)
         self.view.starSelected.connect(lambda _i: self._update_panel(force=True))
+        self.view.conSelected.connect(lambda _i: (self._update_panel(force=True), self._refresh_ui()))
 
         self._build_toolbar()
         self._build_panel()
@@ -329,7 +331,7 @@ class MainWindow(QMainWindow):
         self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
         self.act_minor = self._toggle(m_view, "たくさんの小惑星・彗星（ダウンロードしたもの）", "show_minor")
         self.act_exo = self._toggle(m_view, "系外惑星を持つ恒星（ダウンロードしたもの）", "show_exo")
-        act_find = QAction("小惑星・彗星・系外惑星を探す…", self)
+        act_find = QAction("天体を探す（星座・星雲・小惑星・系外惑星）…", self)
         act_find.setShortcut(QKeySequence("Ctrl+F"))
         act_find.triggered.connect(self._find_minor)
         m_view.addAction(act_find)
@@ -668,16 +670,12 @@ class MainWindow(QMainWindow):
 
     def _find_minor(self):
         mp, ex = self.view.mp, self.view.exo
-        if mp is None and ex is None:
-            QMessageBox.information(self, "小惑星・彗星・系外惑星を探す",
-                                    "まだデータがありません。「ファイル」メニューから、小惑星・彗星や"
-                                    "系外惑星のデータをダウンロードしてください。")
-            return
         dlg = QDialog(self)
-        dlg.setWindowTitle("小惑星・彗星・系外惑星を探す")
+        dlg.setWindowTitle("天体を探す（星座・星雲・小惑星・系外惑星）")
         dlg.resize(460, 440)
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("名前（英語）か番号を入れてください。\n例: Itokawa、Ryugu、433、Halley、TRAPPIST-1、Proxima Cen"))
+        lay.addWidget(QLabel("名前か番号を入れてください。\n例: オリオン、すばる、M42、Itokawa、Ryugu、433、Halley、TRAPPIST-1\n"
+                             "（小惑星・系外惑星はダウンロードしたときだけ、英語の名前で探せます）"))
         ed = QLineEdit()
         lay.addWidget(ed)
         lst = QListWidget()
@@ -685,6 +683,20 @@ class MainWindow(QMainWindow):
 
         def search():
             lst.clear()
+            t = ed.text().strip()
+            if t:
+                tl = t.lower()
+                for i, c in enumerate(self.view.stars.constellations):
+                    if t in c.name or tl == c.id.lower():
+                        it = QListWidgetItem(f"{c.name}　（星座）")
+                        it.setData(Qt.UserRole, f"con:{i}")
+                        lst.addItem(it)
+                for i, n in enumerate(neb.NEBULAE):
+                    mname = f"m{n.m}" if n.m else ""
+                    if t in n.name or tl == mname or tl.replace(" ", "") == n.id.lower():
+                        it = QListWidgetItem(f"{n.name}　（{neb.TYPE_JA[n.type]}）")
+                        it.setData(Qt.UserRole, f"n:{i}")
+                        lst.addItem(it)
             if ex is not None:
                 for i in ex.find(ed.text()):
                     n = len(ex.systems[i]["planets"])
@@ -704,7 +716,15 @@ class MainWindow(QMainWindow):
             if item is None:
                 return
             dlg.accept()
-            self.view.set_target(item.data(Qt.UserRole))
+            key = item.data(Qt.UserRole)
+            if key.startswith("con:"):
+                ci = int(key[4:])
+                v = self.view
+                if v.ground:
+                    v.look_dir(v.stars.constellations[ci].center)
+                v.select_con(ci)
+            else:
+                self.view.set_target(key)
 
         ed.textChanged.connect(search)
         ed.returnPressed.connect(go)
@@ -1027,7 +1047,8 @@ class MainWindow(QMainWindow):
 
     def _update_panel(self, force=False):
         v = self.view
-        key = ("star", v.selected_star) if v.selected_star >= 0 else ("body", v.target, v.ground)
+        key = ("star", v.selected_star) if v.selected_star >= 0 else \
+            ("con", v.selected_con) if v.selected_con >= 0 else ("body", v.target, v.ground)
         if key == self._panel_key and not force:
             return
         self._panel_key = key
@@ -1037,6 +1058,22 @@ class MainWindow(QMainWindow):
             html.append(f"<h2>★ {v.stars.short_name(i)}</h2>")
             html.append("<p>" + v.stars.describe(i).replace("　｜　", "<br>") + "</p>")
             html.append(f"<p>{STAR_TEXT}</p>")
+        elif v.selected_con >= 0:
+            from . import constellation_info as ci
+            c = v.stars.constellations[v.selected_con]
+            season, txt = ci.text(c.id)
+            html.append(f"<h2>{c.name}</h2>")
+            if season:
+                html.append(f"<p style='color:#9ab'>見ごろ：{season}</p>")
+            html.append(f"<p>{txt}</p>")
+            stars = sorted([i for i in range(min(v.stars.count, 3000)) if str(v.stars.con[i]) == c.id],
+                           key=lambda i: v.stars.mag[i])[:5]
+            if stars:
+                html.append("<h3>おもな星</h3><ul>")
+                for i in stars:
+                    html.append(f"<li>{v.stars.short_name(i)}（{v.stars.mag[i]:.1f}等）</li>")
+                html.append("</ul>")
+            html.append("<p style='color:#888'>星座の名前をダブルクリックすると選べます。ほかの場所をダブルクリックすると選択が外れます。</p>")
         elif v.ground:
             html.append("<h2>地上から見た空</h2>")
             html.append(f"<p>{v.place}（北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）から見上げた空です。</p>"
@@ -1335,7 +1372,13 @@ class MainWindow(QMainWindow):
             self.dt_edit.setDateTime(QDateTime.fromSecsSinceEpoch(int(round(unix)), Qt.LocalTime))
             self.dt_edit.blockSignals(False)
 
-        if v.selected_star >= 0:
+        if v.selected_con >= 0 and v.selected_star < 0:
+            from . import constellation_info as ci
+            c = v.stars.constellations[v.selected_con]
+            self.status_info.setText(f"<b>{c.name}</b>　｜　見ごろ：{ci.text(c.id)[0]}")
+            self._refresh_warn(v)
+            return
+        elif v.selected_star >= 0:
             self.status_info.setText("★ " + v.stars.describe(v.selected_star))
             self._refresh_warn(v)
             return

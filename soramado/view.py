@@ -191,6 +191,7 @@ class SpaceView(QOpenGLWidget):
     timeChanged = Signal(float)
     statusChanged = Signal(str)
     starSelected = Signal(int)      # 選んだ恒星の番号（-1 = 選択解除）
+    conSelected = Signal(int)       # 選んだ星座の番号（-1 = 選択解除）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -216,6 +217,10 @@ class SpaceView(QOpenGLWidget):
         self.show_star_names = True
         self.limit_mag = 6.5
         self.selected_star = -1
+        self.selected_con = -1       # 選んだ星座（線を明るくして解説を出す）
+        self._con_screen = []        # 画面に出した星座名の位置（ダブルクリック用）
+        self.m_con_sel = None
+        self._con_sel_i = -1
         self.show_galaxies = True
         self.show_small = True
         self.show_craft = True
@@ -318,6 +323,7 @@ class SpaceView(QOpenGLWidget):
     def set_target(self, key: str, fly: bool = True):
         if not self.valid_key(key):
             return
+        self.selected_con = -1
         if self.ground:
             self.look_at(key)
             return
@@ -369,6 +375,13 @@ class SpaceView(QOpenGLWidget):
         self.targetChanged.emit(key)
         self.update()
         return alt > 0
+
+    def select_con(self, ci: int):
+        """星座を選ぶ（線を明るくして、解説パネルに解説を出す）。"""
+        self.selected_con = ci
+        self.selected_star = -1
+        self.conSelected.emit(ci)
+        self.update()
 
     def look_dir(self, direction, fov=None):
         """地上モードで、その方向（黄道座標の向き）を向く。"""
@@ -1316,6 +1329,17 @@ class SpaceView(QOpenGLWidget):
             k = self._con_fade * (night if self.ground else 1.0)
             p.setUniformValue("u_color", QVector4D(0.10 * k, 0.18 * k, 0.34 * k, 1.0))
             self.m_conlines.draw(f)
+            if self.selected_con >= 0:
+                if self._con_sel_i != self.selected_con:
+                    segs = self.stars.constellations[self.selected_con].segments.reshape(-1, 3).astype(np.float32)
+                    if self.m_con_sel is None:
+                        self.m_con_sel = _Mesh(segs, [(0, 3)], GL_LINES)
+                    else:
+                        self.m_con_sel.update(segs)
+                    self._con_sel_i = self.selected_con
+                kk = max(k, 0.6)
+                p.setUniformValue("u_color", QVector4D(0.35 * kk, 0.65 * kk, 1.0 * kk, 1.0))
+                self.m_con_sel.draw(f)
             p.release()
         if self.show_stars:
             f.glEnable(GL_PROGRAM_POINT_SIZE)
@@ -1900,10 +1924,10 @@ class SpaceView(QOpenGLWidget):
                 painter.drawEllipse(QPointF(pr[0], pr[1]), 9, 9)
         # 星座名
         con_k = self._con_fade * (self._night if self.ground else 1.0)
+        self._con_screen = []
         if self.show_con_names and con_k > 0.05:
             font = painter.font()
-            painter.setPen(QPen(QColor(80, 115, 180, int(190 * con_k))))
-            for c in cat.constellations:
+            for ci, c in sorted(enumerate(cat.constellations), key=lambda t: t[0] != self.selected_con):
                 if not self._above(c.center):
                     continue
                 pr = self._sky_xy(c.center, viewproj, w, h)
@@ -1914,6 +1938,11 @@ class SpaceView(QOpenGLWidget):
                 if any(rect.intersects(r) for r in placed):
                     continue
                 placed.append(rect)
+                self._con_screen.append((rect.adjusted(-4, -4, 4, 4), ci))
+                if ci == self.selected_con:
+                    painter.setPen(QPen(QColor(140, 200, 255, max(200, int(255 * con_k)))))
+                else:
+                    painter.setPen(QPen(QColor(80, 115, 180, int(190 * con_k))))
                 painter.drawText(rect, Qt.AlignCenter, c.name)
             painter.setFont(font)
         # 星の名前（明るい順）
@@ -2029,7 +2058,13 @@ class SpaceView(QOpenGLWidget):
         if mi >= 0:
             self.set_target(f"mp:{mi}")
             return
+        for rect, ci in self._con_screen:
+            if rect.contains(int(x), int(y)):
+                self.select_con(ci)
+                return
         star = self.pick_star(x, y)
+        if star >= 0 and self.selected_con >= 0:
+            self.selected_con = -1
         if self.ground:
             self.selected_star = star
             self.starSelected.emit(star)
