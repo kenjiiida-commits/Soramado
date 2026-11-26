@@ -135,7 +135,11 @@ def procedural(key: str, w: int = 512, h: int = 256) -> QImage:
         rgb = _mix(rgb, (0.98, 0.95, 0.92), heart)     # 「ハート」と呼ばれる明るい平原
     else:
         from .smallbodies import BY_KEY as SB
-        if key in SB:
+        from .satellites import BY_KEY as SAT
+        if key in SAT:
+            c = np.array(SAT[key].color)
+            rgb = _mix(c * 0.6, np.minimum(c * 1.15, 1.0), n)
+        elif key in SB:
             c = np.array(SB[key].color)
             rgb = _mix(c * 0.55, np.minimum(c * 1.1, 1.0), n)
         else:

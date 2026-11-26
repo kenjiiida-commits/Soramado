@@ -25,6 +25,7 @@ from . import cosmos
 from . import spacecraft as crafts
 from . import recorder
 from . import minorplanets as mpl
+from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -46,12 +47,17 @@ PLACES = [
     ("広島", 34.39, 132.46), ("福岡", 33.59, 130.40), ("那覇", 26.21, 127.68),
 ]
 
-TARGET_ORDER = ["sun", "mercury", "venus", "earth", "moon",
-                "mars", "phobos", "deimos",
-                "jupiter", "io", "europa", "ganymede", "callisto",
-                "saturn", "mimas", "enceladus", "tethys", "dione", "rhea", "titan", "iapetus",
-                "uranus", "miranda", "ariel", "umbriel", "titania", "oberon",
-                "neptune", "triton"]
+def _target_order():
+    """惑星のあとに、その衛星を惑星に近い順に並べる。"""
+    from . import satellites as _sats
+    out = ["sun", "mercury", "venus", "earth", "moon"]
+    for planet in ("mars", "jupiter", "saturn", "uranus", "neptune"):
+        out.append(planet)
+        out += [s.key for s in sorted(_sats.BY_PARENT.get(planet, []), key=lambda s: s.a_km)]
+    return out
+
+
+TARGET_ORDER = _target_order()
 SMALL_ORDER = ["pluto", "eris", "makemake", "haumea", "ceres", "pallas", "vesta",
                "itokawa", "ryugu", "bennu", "halley", "encke", "67p"]
 
@@ -151,6 +157,7 @@ class MainWindow(QMainWindow):
             par = BY_KEY[key].parent
             # 衛星は字下げして、どの惑星の衛星か分かるようにする
             self.cb_target.addItem(("　" + BY_KEY[key].name) if par not in ("sun", "") else BY_KEY[key].name, key)
+        self.cb_target.setMaxVisibleItems(30)
         self.cb_target.insertSeparator(self.cb_target.count())
         for key in SMALL_ORDER:
             self.cb_target.addItem(BY_KEY[key].name, key)
@@ -990,11 +997,18 @@ class MainWindow(QMainWindow):
             self.status_info.setText("　｜　".join(parts))
             self._refresh_warn(v)
             return
-        parts = [f"<b>{b.name}</b>", f"半径 {b.radius_km:,.0f} km"]
+        parts = [f"<b>{b.name}</b>",
+                 f"半径 {b.radius_km:,.0f} km" if b.radius_km >= 10 else f"半径 約{b.radius_km:,.1f} km"]
         if b.parent not in ("sun", ""):
             par = BY_KEY[b.parent]
             d = np.linalg.norm(v.positions[key] - v.positions[b.parent]) * astro.AU_KM
             parts.append(f"{par.name}の衛星（{par.name}から {d / 1e4:,.1f} 万km）")
+            st = sats.BY_KEY.get(key)
+            if st is not None:
+                per = f"公転周期 {st.period:,.1f} 日" if st.period >= 2 else f"公転周期 {st.period * 24:,.1f} 時間"
+                if st.i > 90:
+                    per += "（逆行）"
+                parts.append(per)
         if key != "sun":
             parts.append(f"太陽から {_fmt_dist(np.linalg.norm(v.positions[key])):s}")
         if key not in ("earth", "sun"):
@@ -1003,6 +1017,8 @@ class MainWindow(QMainWindow):
             parts.append(f"地球から {_fmt_dist(np.linalg.norm(v.positions['earth']))}")
         surface = v.dist - v.display_radius(key)
         parts.append(f"視点の距離 {_fmt_dist(max(surface, 0.0))}（表面から）")
+        if key in sats.BY_KEY and not sats.uses_ephem(key):
+            parts.append("※ 位置はおおよそ")
         self.status_info.setText("　｜　".join(parts))
         self._refresh_warn(v)
 

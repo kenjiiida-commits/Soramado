@@ -24,6 +24,7 @@ Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
 - ツアー（v0.7）：「ツアー」メニューから、字幕つきで自動的に案内。「太陽系めぐり」「宇宙の大きさ」（地球から約12億光年まで）「今夜の星空」（観測地でその日の夜9時に見える惑星を自動で選んで案内）
 - 画像・動画の保存（v0.10）：Ctrl+S で今の画面を画像（ピクチャ/Soramado）に、「⏺ 録画」ボタンか Ctrl+R で動画（ビデオ/Soramado、MP4）に保存。録画中は1コマずつ描くので、パソコンが遅くても動画はなめらか。「ツアー」→「ツアーを動画にする」で、ツアー全体を1本の動画にできる（ffmpeg が必要: `sudo apt install ffmpeg`）
 - たくさんの小惑星・彗星（v1.1）：「ファイル」メニューから NASA JPL の軌道要素の表（番号付き小惑星 約80万個・彗星 約4千個）をダウンロードして表示。位置はグラフィックの側で計算するのでなめらか。地球に近い小惑星・小惑星帯・ヒルダ群・木星のトロヤ群・ケンタウルス族・太陽系外縁天体・彗星を色分け。点をダブルクリックすると名前と軌道、Ctrl+F で名前や番号から探して飛んでいける。ツアー「小惑星の世界」（v1.2）
+- 衛星を追加（v1.3）：木星（アマルテア・ヒマリアなど14個）と土星（パン・ヤヌス・トロヤ衛星・フェーベ・不規則衛星など28個）。NASA JPL Horizons の軌道要素で計算。トリトンの位置の計算も Horizons の要素に改めた
 - v1.0 の仕上げ：前回の表示（ウィンドウの大きさ・表示メニュー・星の数・惑星の大きさ・時間の速さ・見ていた天体）を覚えて次回に復元。時間が止まっているときは描き直さず省電力。起動時に OpenGL 3.3 を確認。「ヘルプ」→「説明書」（F1）で日本語の説明書を表示
 - 探査機の航路（v0.9）：ボイジャー1号・2号、ニュー・ホライズンズ、はやぶさ、はやぶさ2。航路の線と、その日時の位置を表示し、「見る天体」から選べる。解説パネルにはおもなできごとの年表。ツアー「探査機の旅」も追加
 - 宇宙の果て（v0.8）：観測できる宇宙の果て（宇宙マイクロ波背景放射、約450億光年）の球を、外側からも眺められる（模様は模式図）。SDSS のクエーサー約75万個を、ファイルメニューからダウンロードして表示できる。「見る天体」の最後の「観測できる宇宙の果て」で飛んでいける
@@ -84,7 +85,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 
 - 惑星の位置は NASA JPL の近似軌道要素で計算しています。1800〜2050年の範囲で、地球から見た方向の誤差は水星〜火星で 0.01度程度、木星・土星で 0.2度以内です（`tests/test_astro.py` で astropy と比較）。範囲外の年は概算になります。
 - 月の位置は簡易式で、誤差は 0.05度程度です。
-- 衛星の位置は PyEphem（XEphem の衛星理論）で計算しています。トリトンだけは PyEphem にないので、NASA JPL の平均軌道要素によるおおよその位置です（`tests/test_satellites.py`）。
+- おもな衛星の位置は PyEphem（XEphem の衛星理論）で計算しています。PyEphem にないトリトンと、v1.3 で追加した木星・土星の小さな衛星は、NASA JPL Horizons の2026年11月26日の軌道要素からケプラー運動で計算した、おおよその位置です（2026年から離れるほどずれます。`tests/test_satellites.py` で Horizons の位置と比べています）。
 - 小天体は軌道要素からケプラー運動で計算していて、惑星の引力による変化は入れていないので、おおよその位置です。冥王星は NASA JPL の近似式で、PyEphem と比べて 0.01度程度です（`tests/test_smallbodies.py`）。
 - 探査機の航路は、惑星や小惑星を通過した日付とその日の天体の位置から計算したおおよそのものです。ボイジャーとニュー・ホライズンズの惑星間は、太陽の引力だけで進む弾道軌道（ランベルト問題）として計算しています（打ち上げ直後の軌道の遠日点は、ボイジャー1号 9.2AU・2号 6.4AU で、実際の 8.9AU・6.2AU に近い値になります）。最後の惑星を通過したあとは、2026年11月の公表された距離（ボイジャー1号 約173AU など）へまっすぐ進むとしています。はやぶさ・はやぶさ2 のイオンエンジンでの区間は、なめらかにつないだ近似です（`tests/test_spacecraft.py`）。
 - 遠くの天体の距離は「共動距離」（宇宙の膨張を差し引いた今の距離）で、平坦な ΛCDM 宇宙（H0 = 70、Ωm = 0.3、ΩΛ = 0.7）で計算しています（astropy との差は1%未満、`tests/test_cosmos.py`）。このモデルでは宇宙マイクロ波背景放射までの距離は約444億光年です。
@@ -104,7 +105,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 月の位置: Paul Schlyter, *How to compute planetary positions*
 - 天体の大きさ・自転軸: IAU WGCCRE 報告（2015年）
 - 小天体の軌道要素: 冥王星は NASA JPL の Table 1、その他は Wikipedia の各天体の記事（JPL Small-Body Database などが出典）
-- 衛星の位置: [PyEphem](https://rhodesmill.org/pyephem/)（MIT ライセンス、別途インストール）、トリトンは [NASA JPL Planetary Satellite Mean Elements](https://ssd.jpl.nasa.gov/sats/elem/)
+- 衛星の位置: [PyEphem](https://rhodesmill.org/pyephem/)（MIT ライセンス、別途インストール）、トリトンと追加した小さな衛星は [NASA JPL Horizons](https://ssd.jpl.nasa.gov/horizons/) の軌道要素
 - 恒星: [HYG データベース v4.1](https://github.com/astronexus/HYG-Database)（CC BY-SA 4.0）。変換したデータ `soramado/data/stars.npz` も CC BY-SA 4.0 です
 - 銀河カタログ: [OpenNGC](https://github.com/mattiaverga/OpenNGC)（CC BY-SA 4.0）。変換したデータ `soramado/data/galaxies.npz` も CC BY-SA 4.0 です
 - 小惑星・彗星（ダウンロードした場合）: NASA JPL Solar System Dynamics の軌道要素の表（[ELEMENTS.NUMBR](https://ssd.jpl.nasa.gov/dat/ELEMENTS.NUMBR.gz)、[ELEMENTS.COMET](https://ssd.jpl.nasa.gov/dat/ELEMENTS.COMET)）。データはソフトに同梱せず `~/.local/share/soramado/` に保存します

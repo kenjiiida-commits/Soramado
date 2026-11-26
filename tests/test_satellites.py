@@ -78,11 +78,43 @@ def test_planes():
         n = np.linalg.svd(pts - pts.mean(0))[2][-1]
         pole = astro.pole_vector(parent.pole_ra, parent.pole_dec)
         ang = math.degrees(math.acos(min(1.0, abs(float(np.dot(n, pole))))))
-        if key != "iapetus":        # イアペトゥスは軌道が約15度傾いている
-            worst = max(worst, ang)
-            # もともとの軌道傾斜（ミランダは約4度）＋計算のずれ 4度まで
-            assert ang < 4.0 + S.BY_KEY[key].i, (key, ang)
+        st = S.BY_KEY[key]
+        if key in ("iapetus", "triton") or S.is_irregular(st):
+            continue            # イアペトゥス・トリトン（逆行で約23度）や不規則衛星は、軌道が赤道面から大きく傾いている
+        worst = max(worst, ang)
+        # もともとの軌道傾斜（ミランダは約4度）＋計算のずれ 4度まで
+        incl = st.i if st.epoch == 2451545.0 else 0.0     # Horizons の要素の i は黄道に対する傾き
+        assert ang < 4.0 + incl, (key, ang)
     return worst
+
+
+# JPL Horizons の位置（惑星中心、J2000 黄道座標、2026-11-27 0h TDB）[km]
+HORIZONS = {
+    "triton": (-8.128762560341132E+04, 2.199635735327484E+05, 2.661399869711710E+05),
+    "amalthea": (1.793583311124061E+05, -2.322517852945209E+04, 1.276186292109030E+03),
+    "himalia": (-1.099501694038065E+07, -4.101594390179124E+06, 1.526821616742813E+06),
+    "phoebe": (-1.293990579182043E+06, -1.066845682945582E+07, 1.977498825031524E+05),
+    "janus": (-1.360053769445867E+05, 6.560873357591263E+04, -2.109559973024302E+04),
+}
+
+
+def test_horizons():
+    """Horizons の要素から計算した位置が、1日後の Horizons の位置と合うこと。"""
+    for key, ref in HORIZONS.items():
+        p = S._mean_offset(S.BY_KEY[key], 2461371.5) * astro.AU_KM
+        ref = np.array(ref)
+        ang = math.degrees(math.acos(float(np.dot(p, ref) / np.linalg.norm(p) / np.linalg.norm(ref))))
+        assert ang < 0.5, (key, ang)
+
+
+def test_titan_vs_horizons():
+    """PyEphem のタイタンが Horizons の位置と合うこと。"""
+    if not S.available():
+        return
+    ref = np.array((-1.115271397842465E+06, -4.474683233107856E+05, 3.416545298000585E+05))
+    p = S.offset(S.BY_KEY["titan"], 2461370.5) * astro.AU_KM
+    ang = math.degrees(math.acos(float(np.dot(p, ref) / np.linalg.norm(p) / np.linalg.norm(ref))))
+    assert ang < 2.0, ang
 
 
 if __name__ == "__main__":

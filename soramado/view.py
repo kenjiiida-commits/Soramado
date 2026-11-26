@@ -430,8 +430,16 @@ class SpaceView(QOpenGLWidget):
             return 1.0
         inner = self._INNER_KM.get(parent)
         if inner is None:
-            inner = min(s.a_km for s in sats.BY_PARENT[parent])
+            moons = [s for s in sats.BY_PARENT[parent] if sats.is_major(s)] or sats.BY_PARENT[parent]
+            inner = min(s.a_km for s in moons)
         return max(1.0, self.magnify * BY_KEY[parent].radius_km / (inner * 0.75))
+
+    def sat_hidden(self, key: str) -> bool:
+        """惑星を拡大表示しているとき、拡大した惑星の中に埋もれてしまう小さな衛星は出さない。"""
+        st = sats.BY_KEY.get(key)
+        if st is None or sats.is_major(st) or self.magnify <= 1.0:
+            return False
+        return st.a_km * self.sat_scale(st.parent) < self.magnify * BY_KEY[st.parent].radius_km * 1.3
 
     def moon_scale(self) -> float:
         return self.sat_scale("earth")
@@ -1047,6 +1055,8 @@ class SpaceView(QOpenGLWidget):
                 continue          # 地上モードでは自分の立っている地球は描かない
             if self._is_small(b.key) and (self.ground or not self.show_small):
                 continue
+            if self.sat_hidden(b.key):
+                continue
             r = self.display_radius(b.key)
             pos = rel[b.key]
             d = np.linalg.norm(pos)
@@ -1122,6 +1132,8 @@ class SpaceView(QOpenGLWidget):
                     offset, scale = sun_rel, 1.0
                 elif key in sats.BY_KEY:
                     st = sats.BY_KEY[key]
+                    if self.sat_hidden(key):
+                        continue
                     scale = self.sat_scale(st.parent)
                     offset = rel[st.parent]
                     # 惑星から遠いときは衛星の軌道を描かない（惑星の点に重なるだけなので）
@@ -1135,6 +1147,8 @@ class SpaceView(QOpenGLWidget):
                     offset, scale = sun_rel, 1.0
                 alpha = 0.8 if key == self.target else (0.35 if (key in sats.BY_KEY or key in sbs.BY_KEY)
                                                          else 0.5)
+                if key != self.target and key in sats.BY_KEY and not sats.is_major(sats.BY_KEY[key]):
+                    alpha *= 0.45          # 小さな衛星の軌道は控えめに
                 # 天体のすぐ近くでは、その天体の軌道線が手前を横切って邪魔なので薄くする
                 for k2 in ((key,) if key != "earth" else ("earth", "moon")):
                     near = np.linalg.norm(rel[k2]) / (self.display_radius(k2) * 300.0)
@@ -1226,6 +1240,8 @@ class SpaceView(QOpenGLWidget):
                 continue          # 地平線の下の天体は見えない
             if self._is_small(b.key) and (self.ground or not self.show_small):
                 continue          # 小天体は暗いので、地上からは出さない
+            if self.sat_hidden(b.key):
+                continue
             pr = self._project(rel[b.key], viewproj, w, h)
             if pr is None:
                 continue
