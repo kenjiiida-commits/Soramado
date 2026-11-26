@@ -261,6 +261,7 @@ class SpaceView(QOpenGLWidget):
         self.show_nebulae = True
         self.show_photos = True
         self.show_mwphoto = True
+        self.show_atmosphere = True    # 地上モードで大気の効果（大気差・減光・空の色）をつける
         self.show_star_trails = True   # 星の位置の時代を変えたとき、今の位置からの動きを線で出す
         self.m_trails = None
         self.mw_level = 2              # 天の川の明るさ（0 控えめ 〜 3 とても明るい）
@@ -925,6 +926,10 @@ class SpaceView(QOpenGLWidget):
 
     def _draw_glow(self, f, viewproj, w, h, rel, radius_au, absmag, color):
         """恒星の光芒（太陽や、よその惑星系の恒星）。"""
+        if self._atm_on():
+            t = self._atm_transmit(rel)
+            color = (color[0] * t[0], color[1] * t[1], color[2] * t[2])
+            rel = self._atm_refract(rel)
         clip = viewproj @ np.append(rel, 1.0)
         if clip[3] <= 0:
             return
@@ -1599,6 +1604,7 @@ class SpaceView(QOpenGLWidget):
         view[0, :3], view[1, :3], view[2, :3] = right, up, -fwd
         proj = _perspective(self._fov, w / h, NEAR_AU, FAR_AU)
         viewproj = proj @ view
+        self._set_atm_uniforms()
         self._viewproj = viewproj
         self._eye = eye
         self._basis = (right, up, fwd)
@@ -1883,7 +1889,52 @@ class SpaceView(QOpenGLWidget):
 
     # ---------------------------------------------------------- ラベル・点
 
+    # ---------------------------------------------------------- 大気（地上モード）
+
+    def _atm_on(self) -> bool:
+        return self.ground and self.show_atmosphere
+
+    def _atm_refract(self, rel):
+        """大気差: 地平線近くの天体を少し浮き上がらせる（シェーダーの atmRefract と同じ計算）。"""
+        L = float(np.linalg.norm(rel))
+        if L <= 0:
+            return rel
+        zen = self._gframe[0]
+        d = np.asarray(rel, float) / L
+        sn = max(-1.0, min(1.0, float(np.dot(d, zen))))
+        h = math.degrees(math.asin(sn))
+        if h < -3.0:
+            return rel
+        hc = max(h, -1.5)
+        R = min(max(1.02 / math.tan(math.radians(hc + 10.3 / (hc + 5.11))) / 60.0, 0.0), 0.75)
+        perp = zen - d * sn
+        pl = float(np.linalg.norm(perp))
+        if pl < 1e-9:
+            return rel
+        r = math.radians(R)
+        return (d * math.cos(r) + perp / pl * math.sin(r)) * L
+
+    def _atm_transmit(self, rel):
+        zen = self._gframe[0]
+        sn = max(float(np.dot(np.asarray(rel, float) / max(np.linalg.norm(rel), 1e-30), zen)), 0.0)
+        X = min(1.0 / (sn + 0.025 * math.exp(-11.0 * sn)), 30.0)
+        t = np.exp(-(X - 1.0) * np.array([0.08, 0.12, 0.22]))
+        m = max(float(t[0]), 1e-4)
+        return t / m * m ** 0.2            # シェーダーの atmTransmit と同じ
+
+    def _set_atm_uniforms(self):
+        """大気の効果を使うシェーダーに、天頂の向きとオン・オフを渡す。"""
+        on = self._atm_on()
+        zen = self._gframe[0] if self.ground else np.array([0.0, 0.0, 1.0])
+        for p in (self.p_sphere, self.p_line, self.p_star, self.p_mwsky):
+            p.bind()
+            p.setUniformValue("u_atm_zen", QVector3D(*zen))
+            p.setUniformValue1f("u_atm", 1.0 if on else 0.0)
+            p.release()
+
     def _project(self, v, viewproj, w, h):
+        if self.ground and self.show_atmosphere and getattr(self, "_gframe", None) is not None:
+            v = self._atm_refract(v)
         c = viewproj @ np.append(v, 1.0)
         if c[3] <= 0:
             return None

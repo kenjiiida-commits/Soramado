@@ -16,22 +16,63 @@ in float v_logz;
 void writeDepth() { gl_FragDepth = log2(v_logz) * u_fcoef; }
 """
 
+
+# ---------------------------------------------------------------- 大気（地上モード）
+# 大気差: 空気で光が曲がり、地平線近くの天体は少し浮き上がって見える（地平線で約0.6°）。
+# 大気による減光: 地平線に近いほど空気の層を長く通るので、暗く赤くなる。
+ATM_VS = """
+uniform vec3 u_atm_zen;    // 天頂（地上モードのとき）
+uniform float u_atm;       // 1 = 大気の効果をつける
+vec3 atmRefract(vec3 rel) {
+    if (u_atm < 0.5) return rel;
+    float L = length(rel);
+    if (L <= 0.0) return rel;
+    vec3 d = rel / L;
+    float s = clamp(dot(d, u_atm_zen), -1.0, 1.0);
+    float h = degrees(asin(s));
+    if (h < -3.0) return rel;
+    float hc = max(h, -1.5);
+    float R = 1.02 / tan(radians(hc + 10.3 / (hc + 5.11))) / 60.0;   // Saemundsson の式 [度]
+    R = clamp(R, 0.0, 0.75);
+    vec3 perp = u_atm_zen - d * s;
+    float pl = length(perp);
+    if (pl < 1e-6) return rel;
+    float r = radians(R);
+    return (d * cos(r) + perp / pl * sin(r)) * L;
+}
+float atmAirmass(vec3 dir) {
+    float s = max(dot(normalize(dir), u_atm_zen), -0.02);
+    return 1.0 / (max(s, 0.0) + 0.025 * exp(-11.0 * max(s, 0.0)));        // 地平線で約40
+}
+// 赤・緑・青それぞれが通りぬける割合（青ほど弱まる）。太陽や月は、本当は地平線で千分の一ほどに
+// なるが、画面では目が慣れるので、色は赤くしつつ明るさはゆるやかに落とす
+vec3 atmTransmit(vec3 dir) {
+    if (u_atm < 0.5) return vec3(1.0);
+    float X = min(atmAirmass(dir), 30.0);
+    vec3 t = exp(-(X - 1.0) * vec3(0.08, 0.12, 0.22));
+    float m = max(t.r, 1e-4);
+    return t / m * pow(m, 0.2);
+}
+"""
+
 # ---------------------------------------------------------------- 球（惑星）
 SPHERE_VS = """#version 330 core
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec2 a_uv;
 uniform mat4 u_model;      // 天体の向き・大きさ・カメラからの位置
 uniform mat4 u_viewproj;
-""" + LOGDEPTH_VS + """
+""" + LOGDEPTH_VS + ATM_VS + """
 out vec3 v_world;
 out vec3 v_normal;
 out vec2 v_uv;
+out vec3 v_ext;
 void main() {
     vec4 w = u_model * vec4(a_pos, 1.0);
     v_world = w.xyz;
     v_normal = normalize(mat3(u_model) * a_pos);
     v_uv = a_uv;
-    gl_Position = u_viewproj * w;
+    v_ext = atmTransmit(w.xyz);
+    gl_Position = u_viewproj * vec4(atmRefract(w.xyz), 1.0);
     v_logz = 1.0 + u_logc * gl_Position.w;
 }
 """
@@ -40,6 +81,7 @@ SPHERE_FS = """#version 330 core
 in vec3 v_world;
 in vec3 v_normal;
 in vec2 v_uv;
+in vec3 v_ext;
 """ + LOGDEPTH_FS + """
 uniform sampler2D u_tex;
 uniform sampler2D u_night;
@@ -88,7 +130,7 @@ void main() {
     if (u_mode == 1) {
         vec3 toEye = normalize(-v_world);
         float limb = 0.55 + 0.45 * pow(max(dot(n, toEye), 0.0), 0.6);
-        frag = vec4(base * 1.25 * limb, 1.0);
+        frag = vec4(base * 1.25 * limb * v_ext, 1.0);
         return;
     }
     vec3 l = normalize(u_sun - v_world);
@@ -121,7 +163,7 @@ void main() {
         float dark = 1.0 - smoothstep(-0.15, 0.05, ndl);
         col += texture(u_night, v_uv).rgb * dark * 0.9;
     }
-    frag = vec4(col, 1.0);
+    frag = vec4(col * v_ext, 1.0);
 }
 """
 
@@ -173,9 +215,9 @@ layout(location=0) in vec3 a_pos;
 uniform vec3 u_offset;     // 軌道の中心（カメラ原点）
 uniform float u_scale;
 uniform mat4 u_viewproj;
-""" + LOGDEPTH_VS + """
+""" + LOGDEPTH_VS + ATM_VS + """
 void main() {
-    gl_Position = u_viewproj * vec4(u_offset + a_pos * u_scale, 1.0);
+    gl_Position = u_viewproj * vec4(atmRefract(u_offset + a_pos * u_scale), 1.0);
     v_logz = 1.0 + u_logc * gl_Position.w;
 }
 """
@@ -230,6 +272,7 @@ uniform float u_px;                   // 画面の拡大率（高解像度画面
 uniform float u_gain;                 // 星の明るさの調整
 uniform int u_hide_unknown;           // 距離不明の星を隠す（太陽系から遠く離れたとき）
 uniform float u_near;                 // これより近い星は描かない（よその惑星系を見ているとき。位置の誤差が大きいので）
+""" + ATM_VS + """
 out vec3 v_col;
 void main() {
     vec3 rel = a_pos - u_eye;
@@ -242,6 +285,12 @@ void main() {
     }
     // カメラの位置から見た等級（遠ざかれば暗く、近づけば明るく）
     float m = a_mag + 5.0 * log(d / a_dist) / log(10.0);
+    vec3 ext = vec3(1.0);
+    if (u_atm > 0.5) {                        // 地平線に近いほど暗く、赤く
+        float X = atmAirmass(rel);
+        m += 0.22 * (X - 1.0);
+        ext = exp(-(X - 1.0) * vec3(0.0, 0.06, 0.16));
+    }
     float li = -0.4 * (m - u_limit);          // log10(明るさ / 限界の明るさ)
     if (li < 0.0) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // 画面の外へ（描かない）
@@ -250,10 +299,10 @@ void main() {
         return;
     }
     // 星は方向だけが大事なので、一定の距離に置いて描く
-    gl_Position = u_viewproj * vec4(rel / d * 1000.0, 1.0);
+    gl_Position = u_viewproj * vec4(atmRefract(rel / d * 1000.0), 1.0);
     gl_PointSize = clamp(2.0 + 2.2 * li, 2.0, 16.0) * u_px;
     float a = clamp(0.30 + 0.35 * li, 0.25, 1.4) * u_gain;
-    v_col = a_rgb * a;
+    v_col = a_rgb * a * ext;
 }
 """
 
@@ -423,20 +472,49 @@ void main() {
     }
     if (alt < -0.02) discard;
     float a = max(alt, 0.0);
-    vec3 night = vec3(0.0);
-    vec3 dusk = vec3(0.04, 0.06, 0.14);
-    vec3 noon = mix(vec3(0.55, 0.72, 0.95), vec3(0.18, 0.40, 0.85), pow(a, 0.5));
-    vec3 col = mix(night, dusk, twi);
-    col = mix(col, noon, day);
-    // 太陽のまわりの明るさ（昼）と、夕焼け・朝焼け（太陽が低いとき）
+    // 見る向きの空気の厚さ（大気路程）。地平線に近いほど厚い
+    float X = 1.0 / (a + 0.025 * exp(-11.0 * a));
+    // 太陽の光が空気を通りぬけてくる色（太陽が低いほど赤い）
+    float ss = max(sin(radians(u_sunalt)), 0.0);
+    float Xs = 1.0 / (ss + 0.025 * exp(-11.0 * ss));
+    vec3 sunTint = exp(-Xs * vec3(0.12, 0.20, 0.36));
+    sunTint /= max(max(sunTint.r, sunTint.g), max(sunTint.b, 1e-3));      // 色だけ（明るさは別に）
     vec3 sunh = normalize(u_sun - u_zen * dot(u_sun, u_zen) + vec3(1e-6));
     vec3 rayh = normalize(ray - u_zen * alt + vec3(1e-6));
-    float toward = max(dot(rayh, sunh), 0.0);
+    float toward = max(dot(rayh, sunh), 0.0);       // 太陽の方位に近いほど 1
+    float away = max(-dot(rayh, sunh), 0.0);        // 太陽と反対の方位に近いほど 1
     float near = max(dot(ray, u_sun), 0.0);
-    col += vec3(1.0, 0.9, 0.7) * pow(near, 60.0) * 0.6 * day;
-    float low = 1.0 - smoothstep(-12.0, 10.0, abs(u_sunalt - 1.0));
-    col += vec3(1.0, 0.45, 0.15) * exp(-a * 9.0) * pow(toward, 3.0) * low * 0.8;
-    col += vec3(0.25, 0.12, 0.20) * exp(-a * 4.0) * low * 0.3;
+
+    // 昼の青空: 天頂は濃い青、地平線に近いほど白っぽく明るい
+    vec3 zenithBlue = vec3(0.16, 0.36, 0.80);
+    vec3 horizonWhite = vec3(0.70, 0.80, 0.92);
+    vec3 dayCol = mix(zenithBlue, horizonWhite, 1.0 - exp(-0.35 * (X - 1.0)));
+    dayCol *= mix(sunTint, vec3(1.0), 0.55);
+    // 太陽のまわりの明るいところ（光が細かいちりで前に散る）
+    dayCol += vec3(1.0, 0.92, 0.8) * sunTint * (pow(near, 400.0) * 1.2 + pow(near, 12.0) * 0.25);
+    float dayk = smoothstep(-3.0, 8.0, u_sunalt) * u_sunlight;
+
+    // 薄明（太陽が地平線の下 0〜18°）: 天頂は深い青、太陽の側の地平線は橙〜黄
+    float tw = smoothstep(-18.0, -2.0, u_sunalt);
+    vec3 twiCol = mix(vec3(0.012, 0.02, 0.06), vec3(0.06, 0.10, 0.24), tw) * (0.4 + 0.6 * exp(-a * 2.0));
+    // 市民薄明（太陽 0〜-6°）のころは、まだ空が明るい青
+    twiCol = mix(twiCol, vec3(0.16, 0.26, 0.50) * (0.7 + 0.3 * exp(-a * 2.0)), smoothstep(-7.0, 0.0, u_sunalt));
+    float glowH = exp(-a * 7.0) * pow(toward, 2.0);
+    twiCol += vec3(1.0, 0.42, 0.12) * glowH * smoothstep(-14.0, -3.0, u_sunalt) * 0.75;
+    twiCol += vec3(1.0, 0.75, 0.35) * exp(-a * 14.0) * pow(toward, 6.0) * smoothstep(-8.0, -1.0, u_sunalt) * 0.6;
+    // 太陽と反対側: 地平線のすぐ上に地球の影（暗い青）、その上にピンクの帯（ビーナスの帯）
+    float belt = smoothstep(-7.0, -1.0, u_sunalt) * (1.0 - smoothstep(1.0, 6.0, u_sunalt));
+    float shadow = (1.0 - smoothstep(0.0, 0.07, a)) * away;
+    float pink = exp(-pow((a - 0.13) / 0.07, 2.0)) * away;
+
+    vec3 col = mix(twiCol, dayCol, dayk);
+    col += vec3(0.32, 0.14, 0.20) * pink * belt;
+    col = mix(col, col * vec3(0.55, 0.62, 0.85), shadow * belt);
+    // 日の出・日の入りのころ、太陽の側の地平線を赤く
+    float low = 1.0 - smoothstep(-2.0, 10.0, u_sunalt);
+    col += vec3(1.0, 0.38, 0.10) * exp(-a * 9.0) * pow(toward, 3.0) * low * smoothstep(-6.0, 0.0, u_sunalt) * 0.7 * u_sunlight;
+    // 夜空のかすかな明るさ（大気光）
+    col += vec3(0.004, 0.006, 0.009) * exp(-a * 4.0);
     frag = vec4(col, 1.0);
 }
 """
@@ -685,11 +763,28 @@ uniform mat4 u_inv;          // 画面 → 方向（カメラ原点の座標）
 uniform mat3 u_ecl2eq;       // 黄道座標 → 赤道座標
 uniform sampler2D u_tex;     // 正距円筒図（横 = 赤経、縦 = 赤緯 +90 → -90）
 uniform float u_gain;
+uniform vec3 u_atm_zen;      // 天頂（黄道座標）
+uniform float u_atm;
 out vec4 frag;
 const float PI = 3.14159265358979;
 void main() {
     vec4 p = u_inv * vec4(v_ndc, 0.0, 1.0);
-    vec3 d = normalize(u_ecl2eq * (p.xyz / p.w));
+    vec3 de = normalize(p.xyz / p.w);
+    vec3 ext = vec3(1.0);
+    if (u_atm > 0.5) {
+        // 見えている向き → 本当の向き（大気差のぶん下げる。Bennett の式）
+        float s = clamp(dot(de, u_atm_zen), -1.0, 1.0);
+        float h = degrees(asin(s));
+        float hc = max(h, -1.0);
+        float R = clamp(1.0 / tan(radians(hc + 7.31 / (hc + 4.4))) / 60.0, 0.0, 0.75);
+        vec3 perp = u_atm_zen - de * s;
+        float pl = length(perp);
+        if (pl > 1e-6) de = normalize(de * cos(radians(R)) - perp / pl * sin(radians(R)));
+        float sh = max(s, 0.0);
+        float X = 1.0 / (sh + 0.025 * exp(-11.0 * sh));
+        ext = exp(-(X - 1.0) * vec3(0.18, 0.24, 0.40));
+    }
+    vec3 d = normalize(u_ecl2eq * de);
     float ra = atan(d.y, d.x);                       // -π〜π
     float u1 = ra / (2.0 * PI);
     float u0 = fract(u1);                            // 0〜1（赤経 0h で切れ目）
@@ -699,6 +794,6 @@ void main() {
     vec2 dx1 = vec2(dFdx(u1), dFdx(v)), dy1 = vec2(dFdy(u1), dFdy(v));
     bool use1 = abs(dx1.x) + abs(dy1.x) < abs(dx0.x) + abs(dy0.x);
     vec3 c = textureGrad(u_tex, vec2(u0, v), use1 ? dx1 : dx0, use1 ? dy1 : dy0).rgb;
-    frag = vec4(c * u_gain, 1.0);
+    frag = vec4(c * u_gain * ext, 1.0);
 }
 """

@@ -347,6 +347,7 @@ class MainWindow(QMainWindow):
         self.act_gal = self._toggle(m_view, tr("銀河"), "show_galaxies")
         self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
         self.act_mwphoto = self._toggle(m_view, tr("天の川を写真で表示（ダウンロードしたもの）"), "show_mwphoto")
+        self.act_atm = self._toggle(m_view, tr("大気の効果（地上モード：浮き上がり・減光・空の色）"), "show_atmosphere")
         m_mwl = m_view.addMenu(tr("天の川の明るさ"))
         from PySide6.QtGui import QActionGroup
         self._mw_grp = QActionGroup(self)
@@ -448,7 +449,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto", "show_atmosphere")
 
     def _restore_settings(self):
         st = self.settings
@@ -461,7 +462,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto, "show_atmosphere": self.act_atm}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:

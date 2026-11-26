@@ -311,6 +311,7 @@ EN.update({
     "20万年前": "200,000 years ago", "今": "Now", "20万年後": "200,000 years ahead",
     "◀ 過去へ動かす": "◀ Into the past", "止める": "Stop", "未来へ動かす ▶": "Into the future ▶", "今に戻す": "Back to now",
     "見る星座:": "Constellation:", "明るい星の動いた跡を線で出す": "Show the paths of bright stars", "今の星の位置": "Star positions today",
+    "大気の効果（地上モード：浮き上がり・減光・空の色）": "Atmosphere (ground mode: refraction, extinction, sky colour)",
     "今夜の空ガイド…": "Tonight's sky guide…", "今夜の空ガイド": "Tonight's sky guide",
     "◀ 前の夜": "◀ Previous night", "今夜": "Tonight", "次の夜 ▶": "Next night ▶",
     "そらみ窓を起動したときに、今夜の空ガイドを出す": "Show tonight's sky guide when Soramado starts",
