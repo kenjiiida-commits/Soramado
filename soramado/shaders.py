@@ -456,3 +456,43 @@ void main() {
     frag = vec4(texture(u_tex, v_uv).rgb * u_alpha, 1.0);
 }
 """
+
+# ---------------------------------------------------------------- たくさんの小惑星（位置はここで計算する）
+MP_VS = """#version 330 core
+layout(location=0) in vec3 a_p;      // 軌道面の向き（近日点の方向）
+layout(location=1) in vec3 a_q;
+layout(location=2) in vec4 a_el;     // a [AU], e, 基準日の平均近点角 [rad], 平均運動 [rad/日]
+layout(location=3) in vec3 a_col;
+uniform float u_dt;                  // 基準日からの日数
+uniform vec3 u_sun;                  // カメラから見た太陽の位置
+uniform mat4 u_viewproj;
+uniform float u_gain;
+uniform float u_px;
+""" + LOGDEPTH_VS + """
+out vec3 v_col;
+void main() {
+    float e = a_el.y;
+    float M = mod(a_el.z + a_el.w * u_dt, 6.28318531);
+    float E = e > 0.8 ? 3.14159265 : M + e * sin(M);
+    for (int k = 0; k < 10; k++) {
+        E -= (E - e * sin(E) - M) / (1.0 - e * cos(E));
+    }
+    float xp = a_el.x * (cos(E) - e);
+    float yp = a_el.x * sqrt(max(0.0, 1.0 - e * e)) * sin(E);
+    vec3 rel = u_sun + a_p * xp + a_q * yp;
+    gl_Position = u_viewproj * vec4(rel, 1.0);
+    v_logz = 1.0 + u_logc * gl_Position.w;
+    gl_PointSize = 1.6 * u_px;
+    v_col = a_col * u_gain;
+}
+"""
+
+MP_FS = """#version 330 core
+""" + LOGDEPTH_FS + """
+in vec3 v_col;
+out vec4 frag;
+void main() {
+    writeDepth();
+    frag = vec4(v_col, 1.0);
+}
+"""

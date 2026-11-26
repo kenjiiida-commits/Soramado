@@ -23,6 +23,7 @@ Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
 - 解説パネル（v0.7）：選んだ惑星・衛星・小天体・銀河・恒星の解説を右側に表示（表示メニューで出し入れ）
 - ツアー（v0.7）：「ツアー」メニューから、字幕つきで自動的に案内。「太陽系めぐり」「宇宙の大きさ」（地球から約12億光年まで）「今夜の星空」（観測地でその日の夜9時に見える惑星を自動で選んで案内）
 - 画像・動画の保存（v0.10）：Ctrl+S で今の画面を画像（ピクチャ/Soramado）に、「⏺ 録画」ボタンか Ctrl+R で動画（ビデオ/Soramado、MP4）に保存。録画中は1コマずつ描くので、パソコンが遅くても動画はなめらか。「ツアー」→「ツアーを動画にする」で、ツアー全体を1本の動画にできる（ffmpeg が必要: `sudo apt install ffmpeg`）
+- たくさんの小惑星・彗星（v1.1）：「ファイル」メニューから NASA JPL の軌道要素の表（番号付き小惑星 約80万個・彗星 約4千個）をダウンロードして表示。位置はグラフィックの側で計算するのでなめらか。地球に近い小惑星・小惑星帯・ヒルダ群・木星のトロヤ群・ケンタウルス族・太陽系外縁天体・彗星を色分け。点をダブルクリックすると名前と軌道、Ctrl+F で名前や番号から探して飛んでいける
 - v1.0 の仕上げ：前回の表示（ウィンドウの大きさ・表示メニュー・星の数・惑星の大きさ・時間の速さ・見ていた天体）を覚えて次回に復元。時間が止まっているときは描き直さず省電力。起動時に OpenGL 3.3 を確認。「ヘルプ」→「説明書」（F1）で日本語の説明書を表示
 - 探査機の航路（v0.9）：ボイジャー1号・2号、ニュー・ホライズンズ、はやぶさ、はやぶさ2。航路の線と、その日時の位置を表示し、「見る天体」から選べる。解説パネルにはおもなできごとの年表。ツアー「探査機の旅」も追加
 - 宇宙の果て（v0.8）：観測できる宇宙の果て（宇宙マイクロ波背景放射、約450億光年）の球を、外側からも眺められる（模様は模式図）。SDSS のクエーサー約75万個を、ファイルメニューからダウンロードして表示できる。「見る天体」の最後の「観測できる宇宙の果て」で飛んでいける
@@ -106,6 +107,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 衛星の位置: [PyEphem](https://rhodesmill.org/pyephem/)（MIT ライセンス、別途インストール）、トリトンは [NASA JPL Planetary Satellite Mean Elements](https://ssd.jpl.nasa.gov/sats/elem/)
 - 恒星: [HYG データベース v4.1](https://github.com/astronexus/HYG-Database)（CC BY-SA 4.0）。変換したデータ `soramado/data/stars.npz` も CC BY-SA 4.0 です
 - 銀河カタログ: [OpenNGC](https://github.com/mattiaverga/OpenNGC)（CC BY-SA 4.0）。変換したデータ `soramado/data/galaxies.npz` も CC BY-SA 4.0 です
+- 小惑星・彗星（ダウンロードした場合）: NASA JPL Solar System Dynamics の軌道要素の表（[ELEMENTS.NUMBR](https://ssd.jpl.nasa.gov/dat/ELEMENTS.NUMBR.gz)、[ELEMENTS.COMET](https://ssd.jpl.nasa.gov/dat/ELEMENTS.COMET)）。データはソフトに同梱せず `~/.local/share/soramado/` に保存します
 - クエーサー（ダウンロードした場合）: SDSS DR16Q（Lyke et al. 2020, ApJS 250, 8）。[VizieR](https://vizier.cds.unistra.fr/) のカタログ VII/289 から取得。データはソフトに同梱せず `~/.local/share/soramado/` に保存します
 - 星座線・星座名: [d3-celestial](https://github.com/ofrohn/d3-celestial)（© 2015 Olaf Frohn、BSD 3-Clause）
 - データのライセンスの詳細は `soramado/data/LICENSE-DATA.md` を見てください

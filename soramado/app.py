@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDi
                                QFrame, QTextBrowser, QVBoxLayout,
                                QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QToolBar,
-                               QWidget, QHBoxLayout, QSizePolicy)
+                               QWidget, QHBoxLayout, QSizePolicy, QFileDialog, QListWidget, QListWidgetItem)
 
 from . import __version__, astro, textures
 from .bodies import BODIES, BY_KEY
@@ -24,6 +24,7 @@ from . import tours
 from . import cosmos
 from . import spacecraft as crafts
 from . import recorder
+from . import minorplanets as mpl
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -64,6 +65,7 @@ HELP_TEXT = """<h3>操作方法</h3>
 <tr><td><b>F11</b></td><td>全画面表示</td></tr>
 <tr><td><b>Ctrl+S</b></td><td>画面を画像で保存（ピクチャ/Soramado）</td></tr>
 <tr><td><b>Ctrl+R</b></td><td>録画の開始・停止（ビデオ/Soramado、ffmpeg が必要）</td></tr>
+<tr><td><b>Ctrl+F</b></td><td>小惑星・彗星を名前や番号で探す（データのダウンロードが必要）</td></tr>
 </table>
 <p><b>地上から見る（プラネタリウム）</b></p>
 <table cellpadding="3">
@@ -274,6 +276,12 @@ class MainWindow(QMainWindow):
         act_q = QAction("クエーサーのデータをダウンロード…", self)
         act_q.triggered.connect(self._download_quasars)
         m_file.addAction(act_q)
+        act_mp = QAction("小惑星・彗星のデータをダウンロード…", self)
+        act_mp.triggered.connect(lambda: self._download_minor(None))
+        m_file.addAction(act_mp)
+        act_mpf = QAction("小惑星・彗星のデータを手元のファイルから読み込む…", self)
+        act_mpf.triggered.connect(self._load_minor_files)
+        m_file.addAction(act_mpf)
         m_file.addSeparator()
         act_quit = QAction("終了", self)
         act_quit.setShortcut(QKeySequence.Quit)
@@ -294,6 +302,11 @@ class MainWindow(QMainWindow):
         self.act_starn = self._toggle(m_view, "星の名前", "show_star_names")
         self.act_gal = self._toggle(m_view, "銀河", "show_galaxies")
         self.act_small = self._toggle(m_view, "準惑星・小惑星・彗星", "show_small")
+        self.act_minor = self._toggle(m_view, "たくさんの小惑星・彗星（ダウンロードしたもの）", "show_minor")
+        act_find = QAction("小惑星・彗星を探す…", self)
+        act_find.setShortcut(QKeySequence("Ctrl+F"))
+        act_find.triggered.connect(self._find_minor)
+        m_view.addAction(act_find)
         self.act_craft = self._toggle(m_view, "探査機の航路", "show_craft")
         self.act_qso = self._toggle(m_view, "クエーサー", "show_quasars")
         self.act_cmb = self._toggle(m_view, "宇宙マイクロ波背景放射", "show_cmb")
@@ -340,7 +353,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor")
 
     def _restore_settings(self):
         st = self.settings
@@ -353,7 +366,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
@@ -365,7 +378,7 @@ class MainWindow(QMainWindow):
         if st.value("time/speed") is not None:
             self.cb_speed.setCurrentIndex(int(st.value("time/speed")))
         target = st.value("view/target")
-        if target and (target in BY_KEY or target in gx.BY_KEY):
+        if target and self.view.valid_key(str(target)):
             self.view.set_target(target, fly=False)
 
     def _save_settings(self):
@@ -505,6 +518,108 @@ class MainWindow(QMainWindow):
         dl.start()
         timer.start(200)
 
+    # ---------------------------------------------------------- 小惑星・彗星のダウンロードと検索
+
+    def _load_minor_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "JPL の軌道要素の表を選ぶ（ELEMENTS.NUMBR(.gz) と ELEMENTS.COMET）", str(Path.home() / "ダウンロード"),
+            "軌道要素の表 (ELEMENTS.* *.gz *.txt);;すべてのファイル (*)")
+        if files:
+            self._download_minor(files)
+
+    def _download_minor(self, files):
+        if getattr(self, "_mp_dl", None):
+            return
+        if files is None:
+            ans = QMessageBox.question(
+                self, "小惑星・彗星のデータ",
+                "NASA JPL から、番号の付いた小惑星（約80万個）と彗星（約4千個）の軌道要素の表を"
+                "ダウンロードします。\n\n通信量は約60〜90MB、読み込みまで数分かかることがあります。よろしいですか？")
+            if ans != QMessageBox.Yes:
+                return
+        dl = mpl.MinorPlanetDownloader(files)
+        dlg = QProgressDialog("準備しています…", "キャンセル", 0, 0, self)
+        dlg.setWindowTitle("小惑星・彗星のデータ")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.canceled.connect(dl.cancel)
+        timer = QTimer(self)
+
+        def poll():
+            dlg.setLabelText(f"{dl.stage}…\n{dl.bytes / 1e6:,.1f} MB" if dl.bytes else f"{dl.stage}…")
+            if not dl.done:
+                return
+            timer.stop()
+            dlg.close()
+            self._mp_dl = None
+            if dl.ok:
+                self.view.reload_minor()
+                mp = self.view.mp
+                lines = [f"{len(mp):,} 個の小惑星・彗星を読み込みました。", ""]
+                for k, (_key, name, _c) in enumerate(mpl.KINDS):
+                    n = mp.count(k)
+                    if n:
+                        lines.append(f"　{name}: {n:,} 個")
+                lines += ["", "点をダブルクリックすると、その天体の名前と軌道がわかります。",
+                          "「表示」→「小惑星・彗星を探す」（Ctrl+F）で名前から探せます。"]
+                if dl.message:
+                    lines += ["", dl.message]
+                QMessageBox.information(self, "小惑星・彗星のデータ", "\n".join(lines))
+            else:
+                QMessageBox.warning(
+                    self, "小惑星・彗星のデータ", "読み込めませんでした。\n\n" + dl.message +
+                    "\n\nブラウザーで次のファイルをダウンロードして、「ファイル」→「小惑星・彗星のデータを"
+                    f"手元のファイルから読み込む」で選ぶこともできます。\n{mpl.URL_NUMBERED}\n{mpl.URL_COMETS}")
+
+        timer.timeout.connect(poll)
+        self._mp_dl = (dl, timer, dlg)
+        dl.start()
+        timer.start(200)
+
+    def _find_minor(self):
+        mp = self.view.mp
+        if mp is None:
+            ans = QMessageBox.question(self, "小惑星・彗星を探す",
+                                       "まだ小惑星・彗星のデータがありません。ダウンロードしますか？")
+            if ans == QMessageBox.Yes:
+                self._download_minor(None)
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("小惑星・彗星を探す")
+        dlg.resize(420, 420)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("名前（英語）か番号を入れてください。例: Itokawa、Ryugu、433、Halley"))
+        ed = QLineEdit()
+        lay.addWidget(ed)
+        lst = QListWidget()
+        lay.addWidget(lst, 1)
+
+        def search():
+            lst.clear()
+            for i in mp.find(ed.text()):
+                it = QListWidgetItem(f"{mp.name(i)}　（{mp.kind_name(i)}）")
+                it.setData(Qt.UserRole, i)
+                lst.addItem(it)
+            if lst.count():
+                lst.setCurrentRow(0)
+
+        def go(item=None):
+            item = item or lst.currentItem()
+            if item is None:
+                return
+            dlg.accept()
+            self.view.set_target(f"mp:{item.data(Qt.UserRole)}")
+
+        ed.textChanged.connect(search)
+        ed.returnPressed.connect(go)
+        lst.itemActivated.connect(go)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("そこへ行く")
+        bb.accepted.connect(go)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.exec()
+
     # ---------------------------------------------------------- 解説パネル
 
     def _build_panel(self):
@@ -552,6 +667,13 @@ class MainWindow(QMainWindow):
                     mark = "✔ " if jd_e <= v.jd else ""
                     html.append(f"<li>{mark}{d.year}年{d.month}月{d.day}日　{txt}</li>")
                 html.append("</ul><p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
+            elif v.is_minor(t):
+                i = int(t[3:])
+                html.append(f"<h2>{v.mp.name(i)}</h2>")
+                html.append("<p>" + "<br>".join(v.mp.describe(i, v.jd)) + "</p>")
+                html.append(f"<p>{v.mp.kind_note(i)}</p>")
+                html.append("<p style='color:#888'>軌道の要素は NASA JPL の表によります。位置は惑星の引力を"
+                            "入れていない、おおよそのものです。直径は明るさからの推定です。</p>")
             elif t == "u:cmb":
                 html.append("<h2>観測できる宇宙の果て</h2>")
                 html.append(f"<p>{text_for('u:cmb')}</p>")
@@ -808,6 +930,15 @@ class MainWindow(QMainWindow):
                           f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}",
                           f"最近のできごと: {crafts.last_event(sc, v.jd)}"]
             parts.append("※ 航路はおおよそ")
+            self.status_info.setText("　｜　".join(parts))
+            self._refresh_warn(v)
+            return
+        if v.is_minor(key):
+            i = int(key[3:])
+            p = v.mp.position(i, v.jd)
+            parts = [f"<b>{v.mp.name(i)}</b>"] + v.mp.describe(i, v.jd)[:2] + [
+                f"太陽から {_fmt_dist(np.linalg.norm(p))}",
+                f"地球から {_fmt_dist(np.linalg.norm(p - v.positions['earth']))}", "※ 位置はおおよそ"]
             self.status_info.setText("　｜　".join(parts))
             self._refresh_warn(v)
             return

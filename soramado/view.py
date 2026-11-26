@@ -20,6 +20,7 @@ from . import satellites as sats
 from . import smallbodies as sbs
 from . import cosmos
 from . import spacecraft as crafts
+from . import minorplanets as mpl
 from .bodies import BODIES, BY_KEY
 
 # OpenGL の定数（PySide6 には定義が無いので数値で書く）
@@ -217,6 +218,11 @@ class SpaceView(QOpenGLWidget):
         self.show_cmb = True
         self.qso_count = 0
         self.gcat = GalaxyCatalog()
+        self.show_minor = True
+        self.mp = mpl.load()         # たくさんの小惑星・彗星（ダウンロードしたとき）
+        self.m_mp = None
+        self.m_mp_orbit = None
+        self._mp_orbit_i = -1
 
         # 地上モード（プラネタリウム）
         self.ground = False
@@ -262,11 +268,22 @@ class SpaceView(QOpenGLWidget):
         self.timeChanged.emit(self.jd)
         self.update()
 
+    def is_minor(self, key: str) -> bool:
+        if not key.startswith("mp:") or self.mp is None:
+            return False
+        try:
+            return 0 <= int(key[3:]) < len(self.mp)
+        except ValueError:
+            return False
+
+    def valid_key(self, key: str) -> bool:
+        return key in BY_KEY or self.is_galaxy(key) or key in crafts.BY_KEY or self.is_minor(key)
+
     def is_galaxy(self, key: str) -> bool:
         return key in gx.BY_KEY or key.startswith("c:") or key == "u:cmb"
 
     def set_target(self, key: str, fly: bool = True):
-        if key not in BY_KEY and not self.is_galaxy(key) and key not in crafts.BY_KEY:
+        if not self.valid_key(key):
             return
         if self.ground:
             self.look_at(key)
@@ -310,7 +327,7 @@ class SpaceView(QOpenGLWidget):
 
     def look_at(self, key):
         """地上モードで、その天体の方を向く。地平線の下なら False。"""
-        if key not in BY_KEY or key == "earth":
+        if (key not in BY_KEY and not self.is_minor(key)) or key == "earth":
             return False
         alt, az = self.ground_altaz(key)
         self.g_az = math.radians(az)
@@ -322,7 +339,7 @@ class SpaceView(QOpenGLWidget):
 
     def fly_to(self, key: str, dist: float | None = None):
         """ツアー用：その天体へ、指定した距離まで飛んでいく。"""
-        if key not in BY_KEY and not self.is_galaxy(key) and key not in crafts.BY_KEY:
+        if not self.valid_key(key):
             return
         self.selected_star = -1
         new_dist = dist if dist is not None else self._default_dist(key)
@@ -388,6 +405,9 @@ class SpaceView(QOpenGLWidget):
     def display_radius(self, key: str) -> float:
         if key in crafts.BY_KEY:
             return 1e-10
+        if key.startswith("mp:"):
+            d = self.mp.diameter_km(int(key[3:])) if self.mp is not None else 0.0
+            return max(d, 1.0) / 2 * KM * self.magnify
         if key == "u:cmb":
             return cosmos.CMB_AU
         if key.startswith("c:"):
@@ -423,6 +443,10 @@ class SpaceView(QOpenGLWidget):
     def display_pos(self, key: str) -> np.ndarray:
         if key in crafts.BY_KEY:
             return self.craft_pos(key)
+        if key.startswith("mp:"):
+            if self.mp is None:
+                return self.positions["sun"]
+            return self.mp.position(int(key[3:]), self.jd)
         if key == "u:cmb":
             return self.positions["sun"]
         if key.startswith("c:"):
@@ -438,6 +462,8 @@ class SpaceView(QOpenGLWidget):
     def _min_dist(self, key):
         if key in crafts.BY_KEY:
             return 1e-6
+        if key.startswith("mp:"):
+            return max(1e-6, self.display_radius(key) * 1.15)
         if key == "u:cmb":
             return 1.0
         if self.is_galaxy(key):
@@ -445,6 +471,10 @@ class SpaceView(QOpenGLWidget):
         return self.display_radius(key) * 1.15
 
     def _default_dist(self, key):
+        if key.startswith("mp:"):
+            # 軌道の形と、まわりの小惑星が見えるくらいの距離から
+            r = float(np.linalg.norm(self.display_pos(key)))
+            return max(0.8, min(r * 0.9, 60.0))
         if key in crafts.BY_KEY:
             # 航路が見えるくらいの距離から（遠くへ行った探査機ほど引いて見る）
             r = float(np.linalg.norm(self.craft_pos(key)))
@@ -582,6 +612,8 @@ class SpaceView(QOpenGLWidget):
         self.p_cmb = prog(shaders.CMB_VS, shaders.CMB_FS)
         self.m_qso = None
         self._load_quasars()
+        self.p_mp = prog(shaders.MP_VS, shaders.MP_FS)
+        self._load_minor()
         self.p_gcat = prog(shaders.GCAT_VS, shaders.GCAT_FS)
         self.m_gcat = _Mesh(self.gcat.vertex_data(),
                             [(0, 2), (1, 3), (2, 3), (3, 3), (4, 1), (5, 3), (6, 1), (7, 1)], GL_TRIANGLES)
@@ -654,6 +686,87 @@ class SpaceView(QOpenGLWidget):
         else:
             self.m_qso.update(data)
         self.qso_count = len(data)
+
+    def _load_minor(self):
+        if self.mp is None:
+            return
+        data = self.mp.vertex_data()
+        layout = [(0, 3), (1, 3), (2, 4), (3, 3)]
+        if self.m_mp is None:
+            self.m_mp = _Mesh(data, layout, GL_POINTS)
+        else:
+            self.m_mp.update(data)
+        self._mp_orbit_i = -1
+
+    def reload_minor(self):
+        """小惑星のデータを読み込み直す（ダウンロードが終わったら呼ぶ）。"""
+        self.mp = mpl.load()
+        if self.context() is None or self.gl_error:
+            return
+        self.makeCurrent()
+        self._load_minor()
+        self.doneCurrent()
+        self.update()
+
+    def _draw_minor(self, f, viewproj, sun_rel, sun_far):
+        """たくさんの小惑星・彗星の点と、選んだ小惑星の軌道。"""
+        if self.ground or self.m_mp is None or not self.show_minor:
+            return
+        k = 1.0 - _smooth(400.0, 5000.0, sun_far)
+        if k <= 0.01:
+            return
+        p = self.p_mp
+        p.bind()
+        self._common(p, viewproj)
+        p.setUniformValue1f("u_dt", float(self.jd - mpl.REF_JD))
+        p.setUniformValue("u_sun", QVector3D(*sun_rel))
+        # 引いて見るほど点が重なって白くなりすぎるので、1つ1つを暗くする
+        h = max(1, self.height())
+        focal = h / (2 * math.tan(math.radians(self._fov) / 2))
+        d = max(min(sun_far, self.dist), 3.0)
+        p.setUniformValue1f("u_gain", float(k * 0.083 * (12.0 / d) ** (0.8 if d < 12.0 else 1.5) * (focal / 1000.0) ** 2))
+        p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
+        f.glBlendFunc(GL_ONE, GL_ONE)
+        self.m_mp.draw(f)
+        f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        p.release()
+        if self.is_minor(self.target):
+            i = int(self.target[3:])
+            if i != self._mp_orbit_i:
+                pts = self.mp.orbit_path(i)
+                if self.m_mp_orbit is None:
+                    self.m_mp_orbit = _Mesh(pts, [(0, 3)], GL_LINE_STRIP)
+                else:
+                    self.m_mp_orbit.update(pts)
+                self._mp_orbit_i = i
+            p = self.p_line
+            p.bind()
+            self._common(p, viewproj)
+            p.setUniformValue("u_offset", QVector3D(*sun_rel))
+            p.setUniformValue1f("u_scale", 1.0)
+            col = mpl.KINDS[int(self.mp.kind[i])][2]
+            p.setUniformValue("u_color", QVector4D(*col, 0.8))
+            self.m_mp_orbit.draw(f)
+            p.release()
+
+    def pick_minor(self, x, y, radius=7.0) -> int:
+        """画面上の位置に近い小惑星の番号（なければ -1）。"""
+        if self.mp is None or not self.show_minor or self.ground or self._sun_far > 5000.0:
+            return -1
+        pos = self.mp.positions(self.jd) - self._eye
+        w, h = max(1, self.width()), max(1, self.height())
+        clip = np.column_stack([pos, np.ones(len(pos))]) @ self._viewproj.T
+        ok = clip[:, 3] > 0
+        sx = (clip[:, 0] / np.where(ok, clip[:, 3], 1) * 0.5 + 0.5) * w
+        sy = (0.5 - clip[:, 1] / np.where(ok, clip[:, 3], 1) * 0.5) * h
+        d2 = np.where(ok, (sx - x) ** 2 + (sy - y) ** 2, 1e18)
+        # 近いものの中から、明るい（大きい）ものを優先する
+        near = np.nonzero(d2 < radius * radius)[0]
+        if len(near) == 0:
+            return -1
+        hh = np.where(self.mp.h[near] > 50, 14.0, self.mp.h[near])
+        score = d2[near] / (radius * radius) * 3.0 + hh
+        return int(near[np.argmin(score)])
 
     def reload_quasars(self):
         """ダウンロードが終わったら呼ぶ。"""
@@ -1029,6 +1142,9 @@ class SpaceView(QOpenGLWidget):
                 mesh.draw(f)
             p.release()
 
+        # ---- たくさんの小惑星・彗星
+        self._draw_minor(f, viewproj, sun_rel, sun_far)
+
         # ---- 探査機の航路
         if self.show_craft and not self.ground and sun_far < 2e5:
             p = self.p_line
@@ -1152,6 +1268,8 @@ class SpaceView(QOpenGLWidget):
             self._draw_comet_tails(painter, rel, viewproj, w, h)
         if self.show_craft and not self.ground and getattr(self, "_sun_far", 0) < 2e5:
             self._draw_craft(painter, viewproj, w, h, placed, fm)
+        if self.is_minor(self.target):
+            self._draw_minor_marker(painter, viewproj, w, h, placed, fm)
         self._draw_sky_labels(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
         painter.end()
@@ -1176,6 +1294,24 @@ class SpaceView(QOpenGLWidget):
                 continue
             placed.append(rect)
             painter.drawText(QPointF(x + 9, y + 4), sc.name)
+
+    def _draw_minor_marker(self, painter, viewproj, w, h, placed, fm):
+        """選んでいる小惑星・彗星の印（丸と名前）。"""
+        i = int(self.target[3:])
+        pr = self._project(self.mp.position(i, self.jd) - self._eye, viewproj, w, h)
+        if not pr or not (0 < pr[0] < w and 0 < pr[1] < h):
+            return
+        x, y, _ = pr
+        col = QColor.fromRgbF(*mpl.KINDS[int(self.mp.kind[i])][2])
+        painter.setPen(QPen(col, 1.5))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPointF(x, y), 7, 7)
+        name = self.mp.name(i)
+        rect = fm.boundingRect(name).translated(int(x + 11), int(y + 4))
+        if any(rect.intersects(r) for r in placed):
+            return            # 同じ天体の名前がもう出ているとき（ハレー彗星など）
+        placed.append(rect)
+        painter.drawText(QPointF(x + 11, y + 4), name)
 
     @staticmethod
     def _is_small(key: str) -> bool:
@@ -1467,6 +1603,10 @@ class SpaceView(QOpenGLWidget):
                 best, best_d = key, dd
         if best:
             self.set_target(best)
+            return
+        mi = self.pick_minor(x, y)
+        if mi >= 0:
+            self.set_target(f"mp:{mi}")
             return
         star = self.pick_star(x, y)
         if self.ground:
