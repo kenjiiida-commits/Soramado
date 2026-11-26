@@ -308,6 +308,17 @@ class SpaceView(QOpenGLWidget):
         self.update()
         return alt > 0
 
+    def fly_to(self, key: str, dist: float | None = None):
+        """ツアー用：その天体へ、指定した距離まで飛んでいく。"""
+        if key not in BY_KEY and not self.is_galaxy(key):
+            return
+        self.selected_star = -1
+        new_dist = dist if dist is not None else self._default_dist(key)
+        self._start_fly(key, max(new_dist, self._min_dist(key)), self._galaxy_view_dir(key))
+        self.target = key
+        self.targetChanged.emit(key)
+        self.update()
+
     def overview(self):
         self.selected_star = -1
         self._start_fly("sun", 70.0, None)

@@ -9,7 +9,8 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDockWidget,
+                               QFrame, QTextBrowser, QVBoxLayout,
                                QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QToolBar,
                                QWidget, QHBoxLayout, QSizePolicy)
@@ -19,6 +20,8 @@ from .bodies import BODIES, BY_KEY
 from .view import SpaceView, format_length
 from . import galaxies as gx
 from . import smallbodies as sbs
+from . import tours
+from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
     ("実時間", 1.0),
@@ -63,6 +66,10 @@ HELP_TEXT = """<h3>操作方法</h3>
 <tr><td><b>ホイール</b> / <b>右ドラッグ</b></td><td>視野を広く・狭く（望遠鏡のように拡大）</td></tr>
 <tr><td><b>見る天体</b></td><td>その天体の方を向く</td></tr>
 </table>
+<p><b>ツアー</b>：「ツアー」メニューから選ぶと、字幕つきで自動的に宇宙を案内します。
+「次 ▶」で先へ、Esc キーで終わります。</p>
+<table>
+</table>
 <p>「惑星の大きさ」を上げると、惑星を実際より大きく描きます（太陽は最大10倍）。
 実寸（×1）では、遠くから見ると惑星は点と名前だけになります。</p>
 <p>「星の数」で、何等星まで表示するかを変えられます。肉眼で見えるのは 6.5 等くらいまでです。</p>
@@ -84,12 +91,25 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("Soramado", "Soramado")
 
         self.view = SpaceView(self)
-        self.setCentralWidget(self.view)
+        central = QWidget()
+        lay = QVBoxLayout(central)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.view, 1)
+        self._build_tour_bar()
+        lay.addWidget(self.tour_bar)
+        self.setCentralWidget(central)
         self.view.speed = SPEEDS[DEFAULT_SPEED][1]
         self.view.targetChanged.connect(self._on_target_changed)
+        self.view.starSelected.connect(lambda _i: self._update_panel(force=True))
 
         self._build_toolbar()
+        self._build_panel()
         self._build_menu()
+        self._tour = None
+        self._tour_timer = QTimer(self)
+        self._tour_timer.setSingleShot(True)
+        self._tour_timer.timeout.connect(lambda: self._tour_go(+1))
 
         self.status_info = QLabel()
         self.status_warn = QLabel()
@@ -242,6 +262,20 @@ class MainWindow(QMainWindow):
         act_full.toggled.connect(lambda on: self.showFullScreen() if on else self.showNormal())
         m_view.addAction(act_full)
 
+        m_view.addSeparator()
+        m_view.addAction(self.panel.toggleViewAction())
+
+        m_tour = mb.addMenu("ツアー(&T)")
+        for tid, title, _fn in tours.TOURS:
+            act = QAction(title, self)
+            act.triggered.connect(lambda _=False, t=tid: self.start_tour(t))
+            m_tour.addAction(act)
+        m_tour.addSeparator()
+        act_stop = QAction("ツアーを終わる", self)
+        act_stop.setShortcut(QKeySequence("Esc"))
+        act_stop.triggered.connect(self.stop_tour)
+        m_tour.addAction(act_stop)
+
         m_help = mb.addMenu("ヘルプ(&H)")
         act_howto = QAction("操作方法", self)
         act_howto.triggered.connect(lambda: QMessageBox.information(self, "操作方法", HELP_TEXT))
@@ -251,6 +285,138 @@ class MainWindow(QMainWindow):
         m_help.addAction(act_about)
 
     # ---------------------------------------------------------- 動作
+
+    # ---------------------------------------------------------- 解説パネル
+
+    def _build_panel(self):
+        self.panel = QDockWidget("解説", self)
+        self.panel.setObjectName("panel")
+        self.panel_text = QTextBrowser()
+        self.panel_text.setOpenExternalLinks(True)
+        self.panel_text.setMinimumWidth(260)
+        self.panel.setWidget(self.panel_text)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.panel)
+        self.resizeDocks([self.panel], [300], Qt.Horizontal)
+        self._panel_key = None
+
+    def _update_panel(self, force=False):
+        v = self.view
+        key = ("star", v.selected_star) if v.selected_star >= 0 else ("body", v.target, v.ground)
+        if key == self._panel_key and not force:
+            return
+        self._panel_key = key
+        html = ["<div style='font-size:11pt; line-height:150%'>"]
+        if v.selected_star >= 0:
+            i = v.selected_star
+            html.append(f"<h2>★ {v.stars.short_name(i)}</h2>")
+            html.append("<p>" + v.stars.describe(i).replace("　｜　", "<br>") + "</p>")
+            html.append(f"<p>{STAR_TEXT}</p>")
+        elif v.ground:
+            html.append("<h2>地上から見た空</h2>")
+            html.append(f"<p>{v.place}（北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）から見上げた空です。</p>"
+                        "<p>星は東から昇って南の空を通り、西に沈みます。これは地球が西から東へ自転しているためです。"
+                        "北の空の星は、北極星のまわりを反時計回りに回って見えます。</p>")
+            if v.target in BY_KEY and text_for(v.target):
+                html.append(f"<h3>{BY_KEY[v.target].name}</h3><p>{text_for(v.target)}</p>")
+        else:
+            t = v.target
+            if t.startswith("c:"):
+                i = int(t[2:])
+                html.append(f"<h2>{v.gcat.label(i)}</h2>")
+                html.append("<p>" + v.gcat.describe(i).replace("　｜　", "<br>") + "</p>")
+                html.append(f"<p>{KIND_DESCRIPTIONS.get(int(v.gcat.kind[i]), '')}</p>")
+            else:
+                name = gx.BY_KEY[t].name if t in gx.BY_KEY else BY_KEY[t].name
+                html.append(f"<h2>{name}</h2>")
+                txt = text_for(t)
+                if txt:
+                    html.append(f"<p>{txt}</p>")
+                html.append("<p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
+        html.append("</div>")
+        self.panel_text.setHtml("".join(html))
+
+    # ---------------------------------------------------------- ツアー
+
+    def _build_tour_bar(self):
+        self.tour_bar = QFrame()
+        self.tour_bar.setStyleSheet("QFrame { background: #10172a; } QLabel { color: #e8ecf5; }")
+        lay = QHBoxLayout(self.tour_bar)
+        lay.setContentsMargins(14, 8, 14, 8)
+        self.tour_label = QLabel()
+        self.tour_label.setWordWrap(True)
+        f = self.tour_label.font()
+        f.setPointSizeF(f.pointSizeF() * 1.3)
+        self.tour_label.setFont(f)
+        lay.addWidget(self.tour_label, 1)
+        self.tour_count = QLabel()
+        lay.addWidget(self.tour_count)
+        for text, step in (("◀ 前", -1), ("次 ▶", +1)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, d=step: self._tour_go(d))
+            lay.addWidget(b)
+        b = QPushButton("終了")
+        b.clicked.connect(self.stop_tour)
+        lay.addWidget(b)
+        self.tour_bar.hide()
+
+    def start_tour(self, tid):
+        for t, title, fn in tours.TOURS:
+            if t == tid:
+                steps = fn(self.view) if tid == "tonight" else fn()
+                self._tour = {"title": title, "steps": steps, "i": -1}
+                self.tour_bar.show()
+                self._tour_go(+1)
+                return
+
+    def stop_tour(self):
+        if not self._tour:
+            return
+        self._tour = None
+        self._tour_timer.stop()
+        self.tour_bar.hide()
+
+    def _tour_go(self, d):
+        tr = self._tour
+        if not tr:
+            return
+        i = tr["i"] + d
+        if i < 0:
+            i = 0
+        if i >= len(tr["steps"]):
+            self.stop_tour()
+            return
+        tr["i"] = i
+        st = tr["steps"][i]
+        v = self.view
+        if st.ground:
+            if not self.btn_ground.isChecked():
+                self.btn_ground.setChecked(True)
+            if "jd" in st.extra:
+                v.set_jd(st.extra["jd"])
+            if "speed_index" in st.extra:
+                self.cb_speed.setCurrentIndex(st.extra["speed_index"])
+                v.paused = False
+            else:
+                v.paused = True
+            if st.look:
+                v.look_at(st.look)
+                v.g_fov = st.fov
+            else:
+                v.g_az, v.g_alt, v.g_fov = math.radians(st.az), math.radians(st.alt), st.fov
+        else:
+            if self.btn_ground.isChecked():
+                self.btn_ground.setChecked(False)
+            v.paused = True          # ツアー中は時間を止めて、場面を落ち着いて見られるようにする
+            dist = st.dist
+            if dist is None and st.dist_mult:
+                dist = v._default_dist(st.target) * st.dist_mult
+            v.fly_to(st.target, dist)
+        self.tour_label.setText(st.text)
+        self.tour_count.setText(f"{tr['title']}　{i + 1} / {len(tr['steps'])}")
+        fly = v._fly["dur"] if v._fly else 0.0
+        self._tour_timer.start(int((st.seconds + fly) * 1000))
+        self._update_panel(force=True)
+        v.update()
 
     # ---------------------------------------------------------- 地上モード
 
@@ -374,6 +540,9 @@ class MainWindow(QMainWindow):
 
     def _refresh_ui(self):
         v = self.view
+        self._ui_ticks = getattr(self, "_ui_ticks", 0) + 1
+        if self.panel.isVisible():
+            self._update_panel(force=(self._ui_ticks % 20 == 0))
         self.btn_play.setText("▶ 再生" if v.paused else "⏸ 停止")
         if not self.dt_edit.hasFocus():
             unix = (v.jd - 2440587.5) * 86400.0
