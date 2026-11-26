@@ -244,10 +244,13 @@ class MinorPlanets:
     def vertex_data(self) -> np.ndarray:
         """シェーダーに渡す: P(3) Q(3) a e M0 n 色(3)。"""
         col = np.array([k[2] for k in KINDS], np.float32)[self.kind]
-        # 明るい（大きい）ものほど明るく描く。彗星は等級がないので中くらい
+        # 明るい（大きい）ものほど明るく、暗い小さなものはごく淡く描く（もやにならないように）
         h = np.where(self.h > 50, 13.0, self.h)
-        br = np.clip(0.18 * 10 ** (-0.2 * (h - 15.0)), 0.10, 1.6).astype(np.float32)
-        br[self.kind == 7] = 0.9
+        br = np.clip(10 ** (-0.4 * (h - 14.0)), 0.025, 6.0).astype(np.float32)
+        # 数の少ないなかま（小惑星帯以外）は、埋もれないように明るめに
+        boost = np.array([4.0, 1.0, 2.5, 4.0, 4.0, 2.5, 2.0, 1.0], np.float32)[self.kind]
+        br = np.minimum(br * boost, 6.0)
+        br[self.kind == 7] = 2.5
         col *= br[:, None]
         return np.column_stack([self.P, self.Q, self.a, self.e, self.m0, self.n, col]).astype(np.float32)
 

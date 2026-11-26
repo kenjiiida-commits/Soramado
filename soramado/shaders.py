@@ -470,6 +470,7 @@ uniform float u_gain;
 uniform float u_px;
 """ + LOGDEPTH_VS + """
 out vec3 v_col;
+out float v_size;
 void main() {
     float e = a_el.y;
     float M = mod(a_el.z + a_el.w * u_dt, 6.28318531);
@@ -482,17 +483,34 @@ void main() {
     vec3 rel = u_sun + a_p * xp + a_q * yp;
     gl_Position = u_viewproj * vec4(rel, 1.0);
     v_logz = 1.0 + u_logc * gl_Position.w;
-    gl_PointSize = 1.6 * u_px;
-    v_col = a_col * u_gain;
+    // 明るすぎる点は、色を保ったまま点を大きくする（白飛びさせずに目立たせる）
+    vec3 c = a_col * u_gain;
+    float m = max(c.r, max(c.g, c.b));
+    float size = 1.6;
+    if (m > 1.0) {
+        size *= min(3.0, sqrt(m));
+        c /= m;
+    }
+    gl_PointSize = size * u_px;
+    v_size = size;
+    v_col = c;
 }
 """
 
 MP_FS = """#version 330 core
 """ + LOGDEPTH_FS + """
 in vec3 v_col;
+in float v_size;
 out vec4 frag;
 void main() {
     writeDepth();
-    frag = vec4(v_col, 1.0);
+    if (v_size > 2.0) {
+        vec2 q = gl_PointCoord * 2.0 - 1.0;
+        float r2 = dot(q, q);
+        if (r2 > 1.0) discard;
+        frag = vec4(v_col * (1.0 - r2 * 0.6), 1.0);
+    } else {
+        frag = vec4(v_col, 1.0);
+    }
 }
 """
