@@ -207,6 +207,7 @@ class MainWindow(QMainWindow):
         self.btn_ground = QPushButton(tr("🔭 地上から見る"))
         self.btn_ground.setCheckable(True)
         self.btn_ground.toggled.connect(self._on_ground)
+        self._ground_instant = False
         tb.addWidget(self.btn_ground)
         self.btn_airless = QPushButton(tr("🌑 大気なし"))
         self.btn_airless.setCheckable(True)
@@ -368,6 +369,7 @@ class MainWindow(QMainWindow):
         self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
         self.act_mwphoto = self._toggle(m_view, tr("天の川を写真で表示（ダウンロードしたもの）"), "show_mwphoto")
         self.act_atm = self._toggle(m_view, tr("大気の効果（地上モード：浮き上がり・減光・空の色）"), "show_atmosphere")
+        self.act_lift = self._toggle(m_view, tr("地上と宇宙を行き来するとき、飛び立つ・着陸する様子を見せる"), "show_lift")
         m_lp = m_view.addMenu(tr("空の暗さ（光害）"))
         from PySide6.QtGui import QActionGroup
         self._lp_grp = QActionGroup(self)
@@ -502,7 +504,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto", "show_atmosphere", "show_trails")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto", "show_atmosphere", "show_trails", "show_lift")
 
     def _restore_settings(self):
         st = self.settings
@@ -515,7 +517,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto, "show_atmosphere": self.act_atm, "show_trails": self.act_trails}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto, "show_atmosphere": self.act_atm, "show_trails": self.act_trails, "show_lift": self.act_lift}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
@@ -1211,7 +1213,7 @@ class MainWindow(QMainWindow):
         v.paused = True
         v.set_jd(jd)
         if not self.btn_ground.isChecked():
-            self.btn_ground.setChecked(True)
+            self._set_ground_checked(True)
         self.cb_speed.setCurrentIndex(1)       # 1分/秒
         self._apply_speed()
         v.paused = True
@@ -1748,7 +1750,7 @@ class MainWindow(QMainWindow):
             jd = e.local.get("jd", e.jd_max) if e.kind == "solar" else e.jd_max
             v.set_jd(jd)
             if not self.btn_ground.isChecked():
-                self.btn_ground.setChecked(True)
+                self._set_ground_checked(True)
             self.cb_speed.setCurrentIndex(1)     # 1分/秒
             v.paused = True
             ok = v.look_at("sun" if e.kind == "solar" else "moon")
@@ -1758,7 +1760,7 @@ class MainWindow(QMainWindow):
         else:
             v.set_jd(e.jd_max)
             if self.btn_ground.isChecked():
-                self.btn_ground.setChecked(False)
+                self._set_ground_checked(False)
             self.cb_speed.setCurrentIndex(2)     # 10分/秒
             P = v.positions
             if e.kind == "solar":
@@ -1980,7 +1982,7 @@ class MainWindow(QMainWindow):
         v = self.view
         if st.ground:
             if not self.btn_ground.isChecked():
-                self.btn_ground.setChecked(True)
+                self._set_ground_checked(True)
             if "jd" in st.extra:
                 v.set_jd(st.extra["jd"])
             if "speed_index" in st.extra:
@@ -1995,7 +1997,7 @@ class MainWindow(QMainWindow):
                 v.g_az, v.g_alt, v.g_fov = math.radians(st.az), math.radians(st.alt), st.fov
         else:
             if self.btn_ground.isChecked():
-                self.btn_ground.setChecked(False)
+                self._set_ground_checked(False)
             v.paused = True          # ツアー中は時間を止めて、場面を落ち着いて見られるようにする
             if "jd" in st.extra:
                 v.set_jd(st.extra["jd"])
@@ -2015,8 +2017,16 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------- 地上モード
 
+    def _set_ground_checked(self, on):
+        """プログラムから地上モードを切りかえる（ツアーや日食の場面では、飛ばずにすぐ切りかえる）。"""
+        self._ground_instant = True
+        try:
+            self.btn_ground.setChecked(on)
+        finally:
+            self._ground_instant = False
+
     def _on_ground(self, on):
-        self.view.set_ground(on)
+        self.view.set_ground(on, animate=not self._ground_instant and self.view.show_lift)
         self.btn_all.setEnabled(not on)
         self.sl_mag.setEnabled(not on)
         self.btn_ground.setText(tr("🚀 宇宙へ戻る") if on else tr("🔭 地上から見る"))

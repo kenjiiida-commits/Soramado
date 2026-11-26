@@ -63,12 +63,25 @@ steps += [lambda: w._set_mw_level(3), lambda: w._set_mw_level(2),
           lambda: v.set_target("sc:hayabusa", fly=False), lambda: w._update_panel(force=True),
           lambda: w._on_panel_link(QUrl("jd:2453625.0")), lambda: v.set_jd(2461371.0),
           lambda: v.reload_photos(), lambda: v.reload_mwphoto()]
+# 飛び立つ・着陸する（途中でボタン・天体の選択・クリックをしても壊れないか）
+wait = lambda: [__import__("time").sleep(0.2), app.processEvents()]
+steps += [lambda: w.btn_ground.click(), wait, wait, wait, lambda: w.btn_ground.click(), wait, wait,
+          lambda: v.set_target("mars"), lambda: w.btn_ground.click(), wait, wait, wait, wait,
+          lambda: v._finish_lift(), lambda: w.btn_ground.click(), wait, lambda: v.look_at("moon"),
+          lambda: w.btn_ground.click(), wait, wait, wait, wait, wait, wait, wait, wait, wait, wait,
+          wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, wait,
+          lambda: w.btn_ground.click(), wait, lambda: w.start_tour(__import__("soramado.tours", fromlist=["x"]).TOURS[0][0]),
+          lambda: w.stop_tour(), lambda: setattr(v, "show_lift", False), lambda: w.btn_ground.click(),
+          lambda: w.btn_ground.click(), lambda: setattr(v, "show_lift", True),
+          lambda: w._set_ground_checked(False)]
 for i in range(w.cb_target.count()):
     k = w.cb_target.itemData(i)
     if k: steps.append(lambda k=k: v.set_target(k, fly=False))
 i = {"n": 0}
 def step():
     if i["n"] >= len(steps):
+        if v.lifting():
+            errs.append("lift did not finish")
         print("steps", len(steps), "errors", len(errs))
         for e in errs[:5]: print(e)
         app.quit(); return

@@ -456,6 +456,7 @@ uniform float u_sunalt;    // 太陽の高度 [度]
 uniform float u_sunlight;  // 日食のとき、太陽が見えている割合で空を暗くする（0〜1）
 uniform float u_lp;        // 光害の強さ（0〜1）
 uniform int u_mode;        // 0=空, 1=地面
+uniform float u_air;       // 空気の濃さ（1 = 地上、0 = 宇宙）。高く昇るほど空が暗くなる
 out vec4 frag;
 void main() {
     vec3 ray = normalize(u_fwd + v_ndc.x * u_tx * u_right + v_ndc.y * u_ty * u_up);
@@ -519,6 +520,8 @@ void main() {
     // 光害: 街の明かりが空気で散らされて、地平線ほど明るい橙色に（昼は青空に埋もれる）
     float lpk = u_lp * (1.0 - dayk);
     col += vec3(0.16, 0.11, 0.065) * lpk * (0.3 + 0.7 * exp(-a * 3.0));
+    // 空気がうすくなると、青空 → 藍色 → 黒い宇宙へ（青い光ほど最後まで残る）
+    col *= vec3(pow(u_air, 1.25), pow(u_air, 1.1), u_air);
     frag = vec4(col, 1.0);
 }
 """

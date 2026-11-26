@@ -311,6 +311,10 @@ class SpaceView(QOpenGLWidget):
         self.g_fov = 90.0
         self._fov = FOV_DEG
         self._saved_space = None
+        self._lift = None            # 地上と宇宙のあいだを飛んでいる途中の情報
+        self._lift_cam = None        # 飛んでいる途中のカメラ（位置・前・上）
+        self._air = 1.0              # 空気の濃さ（1 = 地上、0 = 宇宙）
+        self.show_lift = True        # 地上と宇宙を行き来するとき、飛ぶ様子を見せる
 
         # カメラ（注視点のまわりを回る）
         self.target = "sun"
@@ -392,6 +396,7 @@ class SpaceView(QOpenGLWidget):
     def set_target(self, key: str, fly: bool = True):
         if not self.valid_key(key):
             return
+        self._finish_lift()
         self.selected_con = -1
         if self.ground:
             self.look_at(key)
@@ -408,20 +413,221 @@ class SpaceView(QOpenGLWidget):
 
     # ---------------------------------------------------------- 地上モード
 
-    def set_ground(self, on: bool):
+    def set_ground(self, on: bool, animate: bool = False):
+        """地上モードにする・やめる。animate=True なら、飛び立つ・着陸する様子を見せる。"""
+        self._finish_lift()
         if on == self.ground:
             return
         if on:
             self._saved_space = (self.target, self.dist, self.yaw, self.pitch, self.magnify)
+            if animate:
+                self._begin_landing()
+                return
             self._fly = None
             self.magnify = 1.0
             self.ground = True
         else:
+            if animate:
+                self._begin_launch()
+                return
             self.ground = False
             if self._saved_space:
                 self.target, self.dist, self.yaw, self.pitch, self.magnify = self._saved_space
         self.selected_star = -1
         self.update()
+
+    # ---- 飛び立つ・着陸する
+
+    LIFT_SEC = 5.0
+    LIFT_SWITCH_KM = 100.0          # ここで地上の描き方から宇宙の描き方に切りかえる
+
+    def _lift_geom(self, mag):
+        """拡大率 mag のときの、地球の半径と、宇宙に出たあとの視点の距離 [AU]。"""
+        m0 = self.magnify
+        self.magnify = mag
+        try:
+            return self.display_radius("earth"), self._default_dist("earth")
+        finally:
+            self.magnify = m0
+
+    def _new_lift(self, up, mag):
+        r, d = self._lift_geom(mag)
+        fov0 = self.g_fov if self.g_fov >= 20 else 90.0
+        return {"up": up, "stage": "run", "t0": self.now(), "dur": self.LIFT_SEC, "az": self.g_az,
+                "alt0": min(self.g_alt, math.radians(85)), "fov0": fov0, "mag": mag,
+                "hend": max((d - r) * astro.AU_KM, 2 * self.LIFT_SWITCH_KM), "h": 0.0}
+
+    def _begin_launch(self):
+        mag = self._saved_space[4] if self._saved_space else 1.0
+        self._lift = self._new_lift(True, mag)
+        self.selected_star = -1
+        self.update()
+
+    def _begin_landing(self):
+        mag = self.magnify
+        self._lift = self._new_lift(False, mag)
+        # まず、観測地の真上（宇宙に出たときと同じ場所）まで飛んでくる
+        _off, zen, _n, _e = astro.observer_frame(self.jd, self.lat, self.lon)
+        r, d = self._lift_geom(mag)
+        self._lift["stage"] = "pre"
+        self._start_fly("earth", d, zen)
+        self.target = "earth"
+        self.targetChanged.emit("earth")
+        self.selected_star = -1
+        self.update()
+
+    def lifting(self) -> bool:
+        return self._lift is not None
+
+    def lift_altitude_km(self):
+        return self._lift["h"] if self._lift and self._lift["stage"] == "run" else None
+
+    # 飛ぶ速さの目安（時間の割合 → 高度 km）。空気の層の名前が読めるよう、途中はゆっくり
+    _LIFT_KEYS = ((0.0, 0.002), (0.10, 0.05), (0.22, 1.0), (0.36, 12.0), (0.46, 50.0), (0.54, 100.0),
+                  (0.63, 400.0), (0.80, 6000.0), (1.0, None))
+
+    def _lift_h(self, L, s):
+        s = 0.5 * (s + s * s * (3 - 2 * s))
+        keys = [(t, L["hend"] if v is None else min(v, L["hend"])) for t, v in self._LIFT_KEYS]
+        for (t0, h0), (t1, h1) in zip(keys, keys[1:]):
+            if s <= t1:
+                k = (s - t0) / (t1 - t0)
+                return math.exp(math.log(h0) + (math.log(h1) - math.log(h0)) * k)
+        return keys[-1][1]
+
+    def _apply_lift(self):
+        L = self._lift
+        if L is None:
+            return
+        if L["stage"] == "pre":
+            if self._fly:
+                return
+            L["stage"] = "run"
+            L["t0"] = self.now()
+        u = min(1.0, max(0.0, (self.now() - L["t0"]) / L["dur"]))
+        s = u if L["up"] else 1.0 - u
+        hk = self._lift_h(L, s)
+        L["h"] = hk
+        if hk < self.LIFT_SWITCH_KM:
+            # 空気の中: 地上の描き方のまま、空を見上げて、空気をうすくしていく
+            self.ground = True
+            self._lift_cam = None
+            self.magnify = 1.0
+            self._air = math.exp(-hk / 12.0)
+            k = _smooth(0.0, 0.3, s)
+            self.g_az = L["az"]
+            self.g_alt = L["alt0"] + (math.radians(88.0) - L["alt0"]) * k
+            self.g_fov = L["fov0"] + (90.0 - L["fov0"]) * k
+        else:
+            # 宇宙: 真上へ昇りながら、視線を地平線へ、最後に足もとの地球へ向ける
+            self.ground = False
+            self._air = 1.0
+            lh = math.log(hk)
+            lo, hi = math.log(self.LIFT_SWITCH_KM), math.log(L["hend"])
+            self.magnify = math.exp(math.log(max(L["mag"], 1e-9)) * _smooth(lo, hi, lh))
+            off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+            hdir = north * math.cos(L["az"]) + east * math.sin(L["az"])
+            q = _smooth(math.log(300.0), lo + (hi - lo) * 0.85, lh)
+            phi = math.radians(88.0) + (math.radians(-90.0) - math.radians(88.0)) * q
+            fwd = math.cos(phi) * hdir + math.sin(phi) * zen
+            up = -math.sin(phi) * hdir + math.cos(phi) * zen
+            # 最後に、宇宙での画面の向き（黄道の北が上）にそろえる
+            r = _smooth(0.5, 1.0, q)
+            if r > 0:
+                right_s = np.cross(fwd, np.array([0.0, 0.0, 1.0]))
+                if np.linalg.norm(right_s) > 1e-6:
+                    right_s /= np.linalg.norm(right_s)
+                    up_s = np.cross(right_s, fwd)
+                    ang = math.atan2(float(np.dot(np.cross(up, up_s), fwd)), float(np.dot(up, up_s)))
+                    a = ang * r
+                    up = up * math.cos(a) + np.cross(fwd, up) * math.sin(a) + fwd * float(np.dot(fwd, up)) * (1 - math.cos(a))
+            radius = self.display_radius("earth") + hk / astro.AU_KM
+            eye = self.display_pos("earth") + zen * radius
+            self._lift_cam = (eye, fwd / np.linalg.norm(fwd), up / np.linalg.norm(up))
+            if self.target != "earth":
+                self.target = "earth"
+                self.targetChanged.emit("earth")
+            self.dist = radius
+            self.yaw = math.atan2(zen[1], zen[0])
+            self.pitch = math.asin(max(-1.0, min(1.0, float(zen[2]))))
+        if u >= 1.0:
+            self._finish_lift()
+
+    def _finish_lift(self):
+        """飛んでいる途中なら、すぐに着いたことにする。"""
+        L = self._lift
+        if L is None:
+            return
+        self._lift = None
+        self._lift_cam = None
+        self._air = 1.0
+        self._fly = None
+        if L["up"]:
+            _off, zen, _n, _e = astro.observer_frame(self.jd, self.lat, self.lon)
+            self.ground = False
+            self.magnify = L["mag"]
+            self.target = "earth"
+            self.dist = self._default_dist("earth")
+            self.yaw = math.atan2(zen[1], zen[0])
+            self.pitch = math.asin(max(-1.0, min(1.0, float(zen[2]))))
+            self.targetChanged.emit("earth")
+        else:
+            self.ground = True
+            self.magnify = 1.0
+            self.g_az, self.g_alt, self.g_fov = L["az"], L["alt0"], L["fov0"]
+        self.statusChanged.emit("")
+        self.update()
+
+    def _lift_layer(self, hk):
+        if hk < 12:
+            return tr("対流圏（雲や雨ができるところ）")
+        if hk < 50:
+            return tr("成層圏（オゾン層があるところ）")
+        if hk < 85:
+            return tr("中間圏（流れ星が光るところ）")
+        if hk < 95:
+            return tr("熱圏")
+        if hk < 115:
+            return tr("カーマン・ライン（ここから宇宙・高度100 km）")
+        if hk < 360:
+            return tr("熱圏（オーロラが光るところ）")
+        if hk < 450:
+            return tr("国際宇宙ステーション（ISS）の高さ（約400 km）")
+        if 33000 < hk < 38500:
+            return tr("静止衛星の高さ（約3万6千 km）")
+        return tr("宇宙空間")
+
+    def _draw_lift_hud(self, painter, w, h):
+        hk = self.lift_altitude_km()
+        if hk is None:
+            return
+        if hk < 1:
+            alt = f"{hk * 1000:.0f} m"
+        elif hk < 100:
+            alt = f"{hk:.1f} km"
+        else:
+            alt = f"{hk:,.0f} km"
+        text = f"{tr('高度')} {alt}"
+        layer = self._lift_layer(hk)
+        f1 = QFont()
+        f1.setPointSizeF(20)
+        f1.setBold(True)
+        f2 = QFont()
+        f2.setPointSizeF(12)
+        painter.setPen(QColor(0, 0, 0, 160))
+        for font, t, y in ((f1, text, h * 0.80), (f2, layer, h * 0.80 + 34)):
+            painter.setFont(font)
+            r = QRect(0, int(y), w, 40)
+            painter.setPen(QColor(0, 0, 0, 170))
+            painter.drawText(r.translated(1, 1), Qt.AlignHCenter | Qt.AlignTop, t)
+            painter.setPen(QColor(235, 245, 255))
+            painter.drawText(r, Qt.AlignHCenter | Qt.AlignTop, t)
+        hint = QFont()
+        hint.setPointSizeF(9)
+        painter.setFont(hint)
+        painter.setPen(QColor(200, 210, 230, 170))
+        painter.drawText(QRect(0, int(h * 0.80) + 60, w, 30), Qt.AlignHCenter | Qt.AlignTop,
+                         tr("クリックかキーで、すぐに着きます"))
 
     def set_place(self, name, lat, lon):
         self.place, self.lat, self.lon = name, lat, lon
@@ -435,6 +641,7 @@ class SpaceView(QOpenGLWidget):
 
     def look_at(self, key):
         """地上モードで、その天体の方を向く。地平線の下なら False。"""
+        self._finish_lift()
         if (key not in BY_KEY and not self.is_minor(key)) or key == "earth":
             return False
         alt, az = self.ground_altaz(key)
@@ -454,6 +661,7 @@ class SpaceView(QOpenGLWidget):
 
     def look_dir(self, direction, fov=None):
         """地上モードで、その方向（黄道座標の向き）を向く。"""
+        self._finish_lift()
         off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
         alt, az = astro.alt_az(np.asarray(direction), zen, north, east)
         self.g_az = math.radians(az)
@@ -465,6 +673,7 @@ class SpaceView(QOpenGLWidget):
 
     def fly_to(self, key: str, dist: float | None = None, pitch: float | None = None, view_dir=None):
         """ツアー用：その天体へ、指定した距離まで飛んでいく。pitch は見下ろす角度 [度]。"""
+        self._finish_lift()
         if not self.valid_key(key):
             return
         self.selected_star = -1
@@ -480,6 +689,7 @@ class SpaceView(QOpenGLWidget):
         self.update()
 
     def overview(self):
+        self._finish_lift()
         self.selected_star = -1
         self._start_fly("sun", 70.0, None)
         self.target = "sun"
@@ -719,7 +929,9 @@ class SpaceView(QOpenGLWidget):
             dt = now - self._last_tick
             self._last_tick = now
         now = self.now()
-        if not self.paused and self.step_unit:
+        if self._lift:
+            pass                  # 飛んでいるあいだは時間を止める（地球が回って足もとがずれないように）
+        elif not self.paused and self.step_unit:
             # コマ送り: 1恒星日（星が止まって見える）か1太陽日（太陽が止まって見える）ずつ飛ぶ
             self._step_acc += dt * self.step_rate * (1.0 if self.speed >= 0 else -1.0)
             n = int(self._step_acc)
@@ -739,12 +951,14 @@ class SpaceView(QOpenGLWidget):
                 self.pitch = fl["pitch0"] + (fl["pitch1"] - fl["pitch0"]) * e
             if s >= 1.0:
                 self._fly = None
+        if self._lift:
+            self._apply_lift()
         if self.recording and self._on_frame:
             # 1コマずつ確実に描いて、録画に渡す
             self._on_frame(self.grabFramebuffer())
-        elif not self.paused or self._fly or self._idle_frames < 2 or self._meteor_live:
+        elif not self.paused or self._fly or self._lift or self._idle_frames < 2 or self._meteor_live:
             QOpenGLWidget.update(self)
-            self._idle_frames = 0 if (not self.paused or self._fly) else self._idle_frames + 1
+            self._idle_frames = 0 if (not self.paused or self._fly or self._lift) else self._idle_frames + 1
         # 時間が止まっていて何も動いていないときは描き直さない（パソコンの負担を減らす）
 
     def _refresh_positions(self):
@@ -1655,6 +1869,7 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue1f("u_sunlight", float(self._sunlight_sky))
         p.setUniformValue1f("u_lp", float(SKY_GLOW[self.bortle]))
         p.setUniformValue1i("u_mode", mode)
+        p.setUniformValue1f("u_air", float(self._air))
         self.m_glow.draw(f)
         p.release()
 
@@ -1689,15 +1904,18 @@ class SpaceView(QOpenGLWidget):
             up0 = zen
         else:
             self._fov = FOV_DEG
-            focus = self._focus()
-            if not self._fly:
-                self.dist = max(self.dist, self._min_dist(self.target))
-            eye = focus + self._cam_dir() * self.dist
+            if self._lift_cam is not None:
+                eye, fwd, up0 = self._lift_cam          # 飛び立つ・着陸する途中
+            else:
+                focus = self._focus()
+                if not self._fly and not self._lift:
+                    self.dist = max(self.dist, self._min_dist(self.target))
+                eye = focus + self._cam_dir() * self.dist
 
-            # ビュー行列（回転のみ。位置はカメラ原点の座標で渡す）
-            fwd = focus - eye
-            fwd /= np.linalg.norm(fwd)
-            up0 = np.array([0.0, 0.0, 1.0])
+                # ビュー行列（回転のみ。位置はカメラ原点の座標で渡す）
+                fwd = focus - eye
+                fwd /= np.linalg.norm(fwd)
+                up0 = np.array([0.0, 0.0, 1.0])
         right = np.cross(fwd, up0)
         if np.linalg.norm(right) < 1e-9:
             right = np.array([1.0, 0.0, 0.0])
@@ -1736,11 +1954,11 @@ class SpaceView(QOpenGLWidget):
             self._sun_alt = math.degrees(math.asin(max(-1.0, min(1.0, float(np.dot(sun_dir, zen))))))
             if not self.airless:
                 self._draw_sky(f, 0, w, h)
-                # 空が明るいほど星は見えない
-                night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky
+                # 空が明るいほど星は見えない（高く昇って空気がうすいほど、よく見える）
+                night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky * min(1.0, 3.0 * self._air)
                 limit = self.limit_mag - (1.0 - night) * 7.0
                 # 光害: 暗い空（限界等級6.5）を基準に、見える星の限界を変える
-                limit = min(limit, self.limit_mag - (6.5 - NELM[self.bortle]))
+                limit = min(limit, self.limit_mag - (6.5 - NELM[self.bortle]) * self._air)
         self._night = night
 
         # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
@@ -1912,7 +2130,7 @@ class SpaceView(QOpenGLWidget):
             p.release()
 
         # ---- 軌道
-        if self.show_orbits and sun_far < 2e5 and not self.ground:
+        if self.show_orbits and sun_far < 2e5 and not self.ground and self._lift_cam is None:
             p = self.p_line
             p.bind()
             self._common(p, viewproj)
@@ -1965,7 +2183,7 @@ class SpaceView(QOpenGLWidget):
         self._draw_minor(f, viewproj, sun_rel, sun_far)
 
         # ---- 探査機の航路
-        if self.show_craft and not self.ground and sun_far < 2e5:
+        if self.show_craft and not self.ground and self._lift_cam is None and sun_far < 2e5:
             p = self.p_line
             p.bind()
             self._common(p, viewproj)
@@ -2003,7 +2221,7 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- 大気（地上モード）
 
     def _atm_on(self) -> bool:
-        return self.ground and self.show_atmosphere and not self.airless
+        return self.ground and self.show_atmosphere and not self.airless and self._air > 0.5
 
     def _atm_refract(self, rel):
         """大気差: 地平線近くの天体を少し浮き上がらせる（シェーダーの atmRefract と同じ計算）。"""
@@ -2159,6 +2377,7 @@ class SpaceView(QOpenGLWidget):
         self._draw_meteors(painter, viewproj, w, h, placed, fm)
         self._draw_artsats(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
+        self._draw_lift_hud(painter, w, h)
         painter.end()
 
     def _draw_craft(self, painter, viewproj, w, h, placed, fm):
@@ -2689,6 +2908,9 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- マウス・キー
 
     def mousePressEvent(self, e):
+        if self._lift:
+            self._finish_lift()
+            return
         self._drag = (e.position(), e.button(), self.yaw, self.pitch, self.dist, self.g_az, self.g_alt,
                       self.g_fov)
 
@@ -2719,6 +2941,9 @@ class SpaceView(QOpenGLWidget):
         self._drag = None
 
     def wheelEvent(self, e):
+        if self._lift:
+            self._finish_lift()
+            return
         steps = e.angleDelta().y() / 120.0
         if self.ground:
             self.g_fov = max(0.1, min(120.0, self.g_fov * (0.88 ** steps)))
@@ -2769,6 +2994,9 @@ class SpaceView(QOpenGLWidget):
         self.update()
 
     def keyPressEvent(self, e):
+        if self._lift:
+            self._finish_lift()
+            return
         k = e.key()
         if k == Qt.Key_Space:
             self.paused = not self.paused
