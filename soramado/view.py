@@ -261,7 +261,9 @@ class SpaceView(QOpenGLWidget):
         self.show_nebulae = True
         self.show_photos = True
         self.show_mwphoto = True
-        self.show_atmosphere = True    # 地上モードで大気の効果（大気差・減光・空の色）をつける
+        self.show_atmosphere = True
+        self.landscape = None          # 地上の風景（landscape.Landscape）
+        self._land_dirty = False    # 地上モードで大気の効果（大気差・減光・空の色）をつける
         self.show_star_trails = True   # 星の位置の時代を変えたとき、今の位置からの動きを線で出す
         self.m_trails = None
         self.mw_level = 2              # 天の川の明るさ（0 控えめ 〜 3 とても明るい）
@@ -764,6 +766,8 @@ class SpaceView(QOpenGLWidget):
         self.p_tone = prog(shaders.TONE_VS, shaders.TONE_FS)
         self.p_photo = prog(shaders.PHOTO_VS, shaders.PHOTO_FS)
         self.p_mwsky = prog(shaders.MWSKY_VS, shaders.MWSKY_FS)
+        self.p_land = prog(shaders.SKY_VS, shaders.LAND_FS)
+        self._land_tex = None
         self._mw_tex = None
         self.m_quad = _Mesh(np.array([[-1, -1], [1, -1], [-1, 1], [1, 1]], np.float32), [(0, 2)], GL_TRIANGLE_STRIP)
         self.m_full = _Mesh(np.array([[-1, -1], [3, -1], [-1, 3]], np.float32), [(0, 2)], GL_TRIANGLES)
@@ -1199,6 +1203,67 @@ class SpaceView(QOpenGLWidget):
                 self.m_trails.update(segs)
         self.doneCurrent()
         self.update()
+
+    # ---------------------------------------------------------- 地上の風景
+
+    def set_landscape(self, ls):
+        self.landscape = ls
+        self._land_dirty = True
+        self.update()
+
+    def _draw_landscape(self, f, w, h):
+        ls = self.landscape
+        if ls is None:
+            return
+        if self._land_dirty:
+            if self._land_tex:
+                for t in self._land_tex:
+                    if t:
+                        t.destroy()
+            def tex(arr, fmt):
+                img = QImage(np.ascontiguousarray(arr).data, arr.shape[1], arr.shape[0], arr.strides[0], fmt).copy()
+                t = QOpenGLTexture(img)
+                t.setMinificationFilter(QOpenGLTexture.LinearMipMapLinear)
+                t.setMagnificationFilter(QOpenGLTexture.Linear)
+                t.setWrapMode(QOpenGLTexture.DirectionS, QOpenGLTexture.Repeat)
+                t.setWrapMode(QOpenGLTexture.DirectionT, QOpenGLTexture.ClampToEdge)
+                return t
+            self._land_tex = (tex(ls.rgba, QImage.Format.Format_RGBA8888),
+                              tex(ls.emit, QImage.Format.Format_RGB888) if ls.emit is not None else None)
+            self._land_dirty = False
+        right, up, fwd = self._basis
+        zen, north, east = self._gframe
+        p = self.p_land
+        p.bind()
+        p.setUniformValue("u_fwd", QVector3D(*fwd))
+        p.setUniformValue("u_right", QVector3D(*right))
+        p.setUniformValue("u_up", QVector3D(*up))
+        t = math.tan(math.radians(self._fov) / 2)
+        p.setUniformValue1f("u_tx", float(t * w / h))
+        p.setUniformValue1f("u_ty", float(t))
+        p.setUniformValue("u_zen", QVector3D(*zen))
+        p.setUniformValue("u_north", QVector3D(*north))
+        p.setUniformValue("u_east", QVector3D(*east))
+        # 太陽の高さで明るさと色を変える（夜は月明かりほどに暗く、朝夕は赤み）
+        sa = self._sun_alt
+        day = _smooth(-8.0, 6.0, sa) * (0.15 + 0.85 * self._sunlight_sky)
+        warm = 1.0 - _smooth(0.0, 15.0, sa)
+        light = np.array([1.0, 1.0 - 0.25 * warm, 1.0 - 0.5 * warm]) * (0.03 + 0.97 * day)
+        p.setUniformValue("u_light", QVector3D(*light))
+        p.setUniformValue1f("u_night", float(1.0 - _smooth(-6.0, 2.0, sa)))
+        p.setUniformValue1i("u_tex", 0)
+        p.setUniformValue1i("u_emit", 1)
+        f.glActiveTexture(GL_TEXTURE0)
+        self._land_tex[0].bind(0)
+        if self._land_tex[1] is not None:
+            self._land_tex[1].bind(1)
+        p.setUniformValue1i("u_has_emit", int(self._land_tex[1] is not None))
+        f.glEnable(GL_BLEND)
+        f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        self.m_glow.draw(f)
+        f.glDisable(GL_BLEND)
+        f.glActiveTexture(GL_TEXTURE0)
+        p.release()
 
     def reload_exo(self):
         self.exo = exo.load()
@@ -1885,6 +1950,7 @@ class SpaceView(QOpenGLWidget):
 
         if self.ground:
             self._draw_sky(f, 1, w, h)
+            self._draw_landscape(f, w, h)
         self._draw_overlay(rel, viewproj, w, h)
 
     # ---------------------------------------------------------- ラベル・点
@@ -2111,11 +2177,20 @@ class SpaceView(QOpenGLWidget):
             painter.drawEllipse(QPointF(p0[0], p0[1]), 3 + 2 * k, 3 + 2 * k)
 
     def _above(self, direction, margin=0.0) -> bool:
-        """地上モードで、その方向が地平線より上か。"""
+        """地上モードで、その方向が地平線（風景があれば、山や建物）より上か。"""
         if not self.ground:
             return True
         d = np.asarray(direction, dtype=np.float64)
-        return float(np.dot(d, self._gframe[0])) / max(float(np.linalg.norm(d)), 1e-30) > -margin
+        d = d / max(float(np.linalg.norm(d)), 1e-30)
+        sn = float(np.dot(d, self._gframe[0]))
+        if self.landscape is None:
+            return sn > -margin
+        zen, north, east = self._gframe
+        az = math.degrees(math.atan2(float(np.dot(d, east)), float(np.dot(d, north))))
+        alt = math.degrees(math.asin(max(-1.0, min(1.0, sn))))
+        if self.show_atmosphere:
+            alt += 1.02 / math.tan(math.radians(max(alt, -1.5) + 10.3 / (max(alt, -1.5) + 5.11))) / 60.0 if alt > -3 else 0.0
+        return alt > max(self.landscape.height_at(az), -math.degrees(margin))
 
     def _draw_compass(self, painter, viewproj, w, h, placed, fm):
         """地平線上の方角（北・東・南・西など）。"""

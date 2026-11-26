@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QImage, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDockWidget,
                                QFrame, QTextBrowser, QVBoxLayout,
                                QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMainWindow,
@@ -35,6 +35,7 @@ from . import artsat
 from . import dsoimages
 from . import skyphoto
 from . import tonight
+from . import landscape
 from .constellation_info import INFO as CON_INFO
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
@@ -348,6 +349,23 @@ class MainWindow(QMainWindow):
         self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
         self.act_mwphoto = self._toggle(m_view, tr("天の川を写真で表示（ダウンロードしたもの）"), "show_mwphoto")
         self.act_atm = self._toggle(m_view, tr("大気の効果（地上モード：浮き上がり・減光・空の色）"), "show_atmosphere")
+        m_land = m_view.addMenu(tr("地上の風景"))
+        from PySide6.QtGui import QActionGroup
+        self._land_grp = QActionGroup(self)
+        self._land_acts = {}
+        for key, ja, en in landscape.PRESETS:
+            a = QAction(en if EN_MODE else ja, self, checkable=True)
+            a.triggered.connect(lambda _=False, k=key: self._set_landscape(k))
+            self._land_grp.addAction(a)
+            m_land.addAction(a)
+            self._land_acts[key] = a
+        m_land.addSeparator()
+        a = QAction(tr("自分の360°写真を読み込む…"), self, checkable=True)
+        a.triggered.connect(self._load_landscape_file)
+        self._land_grp.addAction(a)
+        m_land.addAction(a)
+        self._land_acts["file"] = a
+        self._land_acts["none"].setChecked(True)
         m_mwl = m_view.addMenu(tr("天の川の明るさ"))
         from PySide6.QtGui import QActionGroup
         self._mw_grp = QActionGroup(self)
@@ -469,6 +487,16 @@ class MainWindow(QMainWindow):
                 act.setChecked(str(val).lower() in ("true", "1"))
         if st.value("view/limit") is not None:
             self.sl_stars.setValue(int(st.value("view/limit")))
+        ls = str(st.value("view/landscape", "none"))
+        try:
+            if ls.startswith("file|"):
+                _f, path, north = ls.split("|")
+                if Path(path).is_file():
+                    self._load_landscape_file(path, float(north), save=False)
+            elif ls != "none" and ls in self._land_acts:
+                self._set_landscape(ls, save=False)
+        except (ValueError, OSError):
+            pass
         try:
             lv = st.value("view/mw_level")
             if lv is not None and 0 <= int(lv) <= 3:
@@ -495,6 +523,52 @@ class MainWindow(QMainWindow):
         st.setValue("time/speed", self.cb_speed.currentIndex())
         if not self.view.ground:
             st.setValue("view/target", self.view.target)
+
+    def _set_landscape(self, key, save=True):
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.view.set_landscape(landscape.make(key))
+        finally:
+            QApplication.restoreOverrideCursor()
+        if key in self._land_acts:
+            self._land_acts[key].setChecked(True)
+        if save:
+            self.settings.setValue("view/landscape", key)
+        if key != "none" and not self.view.ground and save:
+            self.statusBar().showMessage(tr("風景は「地上から見る」のときに出ます"), 6000)
+
+    def _load_landscape_file(self, path=None, north=None, save=True):
+        from PySide6.QtWidgets import QInputDialog
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self, tr("360°写真（正距円筒図）を選ぶ"), str(Path.home()),
+                tr("画像 (*.png *.jpg *.jpeg *.webp)"))
+            if not path:
+                self._land_acts.get(str(self.settings.value("view/landscape", "none")).split("|")[0],
+                                    self._land_acts["none"]).setChecked(True)
+                return
+        img = QImage(path)
+        if img.isNull():
+            QMessageBox.warning(self, tr("地上の風景"), tr("画像を読めませんでした。"))
+            return
+        if north is None:
+            north, ok = QInputDialog.getInt(
+                self, tr("地上の風景"),
+                tr("写真の左はしは、どの方位ですか？（北 = 0、東 = 90、南 = 180、西 = 270）\n"
+                   "空のところが透明な PNG にすると、星空が見えます。"), 0, 0, 359)
+            if not ok:
+                return
+        img = img.convertToFormat(QImage.Format.Format_RGBA8888)
+        if img.width() > 8192:
+            img = img.scaledToWidth(8192, Qt.SmoothTransformation)
+        w, h = img.width(), img.height()
+        arr = np.frombuffer(img.constBits(), np.uint8, count=img.bytesPerLine() * h).reshape(h, img.bytesPerLine())
+        arr = arr[:, :w * 4].reshape(h, w, 4).copy()
+        self.view.set_landscape(landscape.from_image(arr, float(north), Path(path).name))
+        self._land_acts["file"].setChecked(True)
+        if save:
+            self.settings.setValue("view/landscape", f"file|{path}|{north}")
 
     def _set_mw_level(self, i):
         self.view.mw_level = i

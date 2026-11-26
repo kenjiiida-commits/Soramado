@@ -797,3 +797,41 @@ void main() {
     frag = vec4(c * u_gain * ext, 1.0);
 }
 """
+
+
+# ---------------------------------------------------------------- 地上の風景（正距円筒図の画像）
+LAND_FS = """#version 330 core
+in vec2 v_ndc;
+uniform vec3 u_fwd;
+uniform vec3 u_right;
+uniform vec3 u_up;
+uniform float u_tx;
+uniform float u_ty;
+uniform vec3 u_zen;
+uniform vec3 u_north;
+uniform vec3 u_east;
+uniform sampler2D u_tex;     // 風景（空は透明）
+uniform sampler2D u_emit;    // 夜に光るところ（街の明かり）
+uniform int u_has_emit;
+uniform vec3 u_light;        // 昼の光の強さと色（夜は暗く、夕方は赤み）
+uniform float u_night;       // 夜の明かりの強さ
+out vec4 frag;
+const float PI = 3.14159265358979;
+void main() {
+    vec3 ray = normalize(u_fwd + v_ndc.x * u_tx * u_right + v_ndc.y * u_ty * u_up);
+    float s = clamp(dot(ray, u_zen), -1.0, 1.0);
+    float az = atan(dot(ray, u_east), dot(ray, u_north));          // 北 = 0、東 = +π/2
+    float u1 = az / (2.0 * PI);
+    float u0 = fract(u1);
+    float v = acos(s) / PI;                                         // 0 = 天頂
+    vec2 dx0 = vec2(dFdx(u0), dFdx(v)), dy0 = vec2(dFdy(u0), dFdy(v));
+    vec2 dx1 = vec2(dFdx(u1), dFdx(v)), dy1 = vec2(dFdy(u1), dFdy(v));
+    bool use1 = abs(dx1.x) + abs(dy1.x) < abs(dx0.x) + abs(dy0.x);
+    vec2 gx = use1 ? dx1 : dx0, gy = use1 ? dy1 : dy0;
+    vec4 c = textureGrad(u_tex, vec2(u0, v), gx, gy);
+    if (c.a < 0.02) discard;
+    vec3 col = c.rgb * u_light;
+    if (u_has_emit == 1) col += textureGrad(u_emit, vec2(u0, v), gx, gy).rgb * u_night;
+    frag = vec4(col, c.a);
+}
+"""

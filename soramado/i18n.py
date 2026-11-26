@@ -312,6 +312,14 @@ EN.update({
     "◀ 過去へ動かす": "◀ Into the past", "止める": "Stop", "未来へ動かす ▶": "Into the future ▶", "今に戻す": "Back to now",
     "見る星座:": "Constellation:", "明るい星の動いた跡を線で出す": "Show the paths of bright stars", "今の星の位置": "Star positions today",
     "大気の効果（地上モード：浮き上がり・減光・空の色）": "Atmosphere (ground mode: refraction, extinction, sky colour)",
+    "地上の風景": "Landscape", "自分の360°写真を読み込む…": "Load my own 360° photo…",
+    "風景は「地上から見る」のときに出ます": "The landscape appears in \"View from ground\"",
+    "360°写真（正距円筒図）を選ぶ": "Choose a 360° photo (equirectangular)", "画像 (*.png *.jpg *.jpeg *.webp)": "Images (*.png *.jpg *.jpeg *.webp)",
+    "画像を読めませんでした。": "Could not read the image.",
+    "写真の左はしは、どの方位ですか？（北 = 0、東 = 90、南 = 180、西 = 270）\n"
+    "空のところが透明な PNG にすると、星空が見えます。":
+    "Which azimuth is the left edge of the photo? (N = 0, E = 90, S = 180, W = 270)\n"
+    "Use a PNG with a transparent sky to see the stars.",
     "今夜の空ガイド…": "Tonight's sky guide…", "今夜の空ガイド": "Tonight's sky guide",
     "◀ 前の夜": "◀ Previous night", "今夜": "Tonight", "次の夜 ▶": "Next night ▶",
     "そらみ窓を起動したときに、今夜の空ガイドを出す": "Show tonight's sky guide when Soramado starts",
