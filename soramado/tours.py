@@ -190,10 +190,56 @@ def asteroids(view) -> list[Step]:
     return steps
 
 
+def exoplanets(view) -> list[Step]:
+    """系外惑星の世界。系外惑星のデータが必要。"""
+    ex = view.exo
+    LY = 63241.077
+    if ex is None:
+        return [Step("このツアーには系外惑星のデータが必要です。「ファイル」→「系外惑星のデータをダウンロード」を"
+                     "してから、もう一度始めてください。", "sun", dist=40.0, seconds=10)]
+
+    def sys_key(host):
+        hit = [i for i in ex.find(host) if ex.name(i).lower() == host.lower()]
+        return f"x:{hit[0]}" if hit else None
+
+    run = {"speed_index": 4}      # 6時間/秒で、惑星が回る様子を見せる
+    steps = [
+        Step(f"太陽系の外にも、たくさんの惑星が見つかっています。いまわかっているのは、{len(ex):,}個の恒星をまわる"
+             f"{ex.count_planets:,}個の惑星です。緑の丸が、惑星を持つ恒星です。", "sun", dist=40 * LY, pitch=30,
+             seconds=12),
+        Step("引いて見ると、見つかった惑星系は太陽のまわり、数千光年以内に集まっています。"
+             "天の川銀河には数千億個の恒星があり、その多くが惑星を持っていると考えられています。", "sun",
+             dist=4000 * LY, pitch=40, seconds=12),
+    ]
+    plan = [
+        ("51 Peg", "ペガスス座51番星。1995年、太陽に似た恒星のまわりで初めて見つかった系外惑星です。"
+                   "木星くらいの重さなのに、わずか4日で恒星を1周する「ホット・ジュピター」でした。"
+                   "発見した2人は2019年にノーベル物理学賞を受けました。", 14),
+        ("Proxima Cen", "プロキシマ・ケンタウリは、太陽にいちばん近い恒星（4.2光年）です。"
+                        "小さな赤い恒星のハビタブルゾーンの中を、地球くらいの重さの惑星 b が回っています。", 13),
+        ("TRAPPIST-1", "TRAPPIST-1 には、地球くらいの大きさの惑星が7つあります。そのうちのいくつかは"
+                       "ハビタブルゾーン（緑の軌道）の中です。7つとも、水星の軌道よりずっと内側に収まっています。", 15),
+        ("Kepler-452", "ケプラー452b は、太陽に似た恒星のまわりを、地球に近い距離（約1年）で回る惑星です。"
+                       "地球より少し大きく、「地球のいとこ」と呼ばれました。約1400光年のかなたにあります。", 13),
+        ("Kepler-90", "ケプラー90には、太陽系と同じ8つの惑星が見つかっています。ただし8つとも、"
+                      "地球の軌道より内側にぎゅっと詰まっています。", 13),
+        ("HR 8799", "HR 8799 では、4つの巨大な惑星が直接撮影されました。恒星の光をさえぎって、"
+                    "惑星そのものの光をとらえています。", 13),
+    ]
+    for host, text, sec in plan:
+        key = sys_key(host)
+        if key:
+            steps.append(Step(text, key, extra=dict(run), seconds=sec))
+    steps.append(Step("そして、わたしたちの太陽系。ほかの惑星系とくらべると、太陽系はどんな特徴があるでしょうか。"
+                      "生命を宿す惑星は、ほかにもあるのでしょうか。", "sun", dist=60.0, pitch=35, seconds=12))
+    return steps
+
+
 TOURS = [
     ("solar", "太陽系めぐり", solar_system),
     ("scale", "宇宙の大きさ", scale_of_universe),
     ("tonight", "今夜の星空", tonight),
     ("explorers", "探査機の旅", explorers),
     ("asteroids", "小惑星の世界", asteroids),
+    ("exoplanets", "系外惑星の世界", exoplanets),
 ]

@@ -804,7 +804,7 @@ class MainWindow(QMainWindow):
     def start_tour(self, tid):
         for t, title, fn in tours.TOURS:
             if t == tid:
-                steps = fn(self.view) if tid in ("tonight", "asteroids") else fn()
+                steps = fn(self.view) if tid in ("tonight", "asteroids", "exoplanets") else fn()
                 self._tour = {"title": title, "steps": steps, "i": -1}
                 self.tour_bar.show()
                 self._tour_go(+1)
@@ -859,6 +859,9 @@ class MainWindow(QMainWindow):
             v.paused = True          # ツアー中は時間を止めて、場面を落ち着いて見られるようにする
             if "jd" in st.extra:
                 v.set_jd(st.extra["jd"])
+            if "speed_index" in st.extra:      # 惑星が回る様子を見せる場面では、時間を進める
+                self.cb_speed.setCurrentIndex(st.extra["speed_index"])
+                v.paused = False
             dist = st.dist
             if dist is None and st.dist_mult:
                 dist = v._default_dist(st.target) * st.dist_mult
