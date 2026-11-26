@@ -637,3 +637,33 @@ void main() {
     frag = vec4(o, 1.0);
 }
 """
+
+
+# ---------------------------------------------------------------- 星雲・銀河の写真（地球から見た向きの板）
+PHOTO_VS = """#version 330 core
+layout(location=0) in vec2 a_c;       // 板の角 [-1, 1]
+uniform vec3 u_center;                // 天体の中心（カメラ原点、縮めた座標）
+uniform vec3 u_ax1;                   // 写真の右向き（西）× 半分の幅
+uniform vec3 u_ax2;                   // 写真の上向き（北）× 半分の高さ
+uniform mat4 u_viewproj;
+out vec2 v_c;
+void main() {
+    v_c = a_c;
+    gl_Position = u_viewproj * vec4(u_center + a_c.x * u_ax1 + a_c.y * u_ax2, 1.0);
+}
+"""
+
+PHOTO_FS = """#version 330 core
+in vec2 v_c;
+uniform sampler2D u_tex;
+uniform float u_gain;
+uniform float u_flip;
+out vec4 frag;
+void main() {
+    float r = length(v_c);
+    float m = 1.0 - smoothstep(0.62, 0.98, r);            // まわりはなめらかに消す
+    if (m <= 0.0) discard;
+    vec2 uv = vec2(v_c.x * 0.5 + 0.5, u_flip > 0.5 ? 0.5 - v_c.y * 0.5 : v_c.y * 0.5 + 0.5);
+    frag = vec4(texture(u_tex, uv).rgb * (u_gain * m), 1.0);
+}
+"""

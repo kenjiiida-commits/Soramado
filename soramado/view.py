@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF,
+from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF,
                            QVector2D, QVector3D, QVector4D)
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject, QOpenGLFramebufferObjectFormat,
                               QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture, QOpenGLVertexArrayObject)
@@ -27,6 +27,7 @@ from . import eclipses
 from . import nebulae as neb
 from . import events as ev
 from . import artsat
+from . import dsoimages
 from .i18n import EN_MODE, tr, trx
 from .bodies import BODIES, BY_KEY
 
@@ -52,6 +53,8 @@ GL_FRAMEBUFFER = 0x8D40
 GL_TEXTURE0 = 0x84C0
 GL_TEXTURE_2D = 0x0DE1
 GLOW_EXPOSURE = 1.3          # 星雲・銀河の明るさ（圧縮する前にかける倍率）
+PHOTO_GAIN = 0.85            # 写真の明るさ
+PHOTO_FLIP = 1               # 写真の上下（テクスチャの向き）
 
 FOV_DEG = 45.0
 NEAR_AU = 1e-10
@@ -252,6 +255,9 @@ class SpaceView(QOpenGLWidget):
         self.gcat = GalaxyCatalog()
         self._sunlight_sky = 1.0
         self.show_nebulae = True
+        self.show_photos = True
+        self._photo_w = {}             # 天体ごとの写真の濃さ（0〜1）。模式図はその分だけ薄くする
+        self.reload_photos(gl=False)
         self.show_meteors = True
         self.show_artsat = True
         self.artsats = artsat.load()     # 人工衛星（TLE をダウンロードしたとき）
@@ -485,6 +491,8 @@ class SpaceView(QOpenGLWidget):
             v = to_us * 0.85 + normal * 0.45
             return v / np.linalg.norm(v)
         g = gx.BY_KEY[key]
+        if self.has_photo(key) and g.center is not None:
+            return -g.center / np.linalg.norm(g.center)        # 写真があるときは地球から見た向きで
         normal = g.rot[:, 2]
         if g.kind == "milkyway":
             # 銀河北極の側から、太陽のある側を手前にして見下ろす
@@ -744,6 +752,8 @@ class SpaceView(QOpenGLWidget):
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
         self.p_tone = prog(shaders.TONE_VS, shaders.TONE_FS)
+        self.p_photo = prog(shaders.PHOTO_VS, shaders.PHOTO_FS)
+        self.m_quad = _Mesh(np.array([[-1, -1], [1, -1], [-1, 1], [1, 1]], np.float32), [(0, 2)], GL_TRIANGLE_STRIP)
         self.m_full = _Mesh(np.array([[-1, -1], [3, -1], [-1, 3]], np.float32), [(0, 2)], GL_TRIANGLES)
         self._glow_fbo = None
         self.m_galaxies = _Mesh(gx.build(), [(0, 3), (1, 1), (2, 1), (3, 3)], GL_POINTS)
@@ -849,11 +859,13 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue1f("u_px", float(self.devicePixelRatioF()))
         p.setUniformValue1f("u_haze_gain", float(k * 2.2))
         f.glBlendFunc(GL_ONE, GL_ONE)
-        for n, m in zip(neb.NEBULAE, self.m_neb):
+        for i, (n, m) in enumerate(zip(neb.NEBULAE, self.m_neb)):
+            pw = 1.0 - 0.92 * self._photo_w.get(f"n:{i}", 0.0)     # 写真を出すときは模式図を薄く
+            p.setUniformValue1f("u_haze_gain", float(k * 2.2 * pw))
             c = n.pos - self._eye
             d = float(np.linalg.norm(c))
             # 星団の星は、近づくほど明るく見える（地球から見たときを基準に）
-            star = min(1.0, 0.35 * (n.ly * LY_AU / max(d, 1.0)) ** 1.2) * k
+            star = min(1.0, 0.35 * (n.ly * LY_AU / max(d, 1.0)) ** 1.2) * k * pw
             p.setUniformValue1f("u_star_gain", float(star))
             p.setUniformValue("u_center", QVector3D(*c))
             m.draw(f)
@@ -966,6 +978,130 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue("u_color", QVector4D(*col, 0.55))
             m.draw(f)
         p.release()
+
+    # ---------------------------------------------------------- 星雲・銀河の写真
+
+    PHOTO_SMALL = 256              # 小さく見えるときの写真の大きさ
+    PHOTO_BIG_MAX = 12             # 大きい写真を同時に持っておく数
+
+    def reload_photos(self, gl=True):
+        old = getattr(self, "_ph", {})
+        if gl and old:
+            self.makeCurrent()
+            for e in old.values():
+                for k in ("small", "big"):
+                    if e.get(k):
+                        e[k].destroy()
+            self.doneCurrent()
+        self._ph = {key: {"t": t, "path": p, "small": None, "big": None, "used": 0.0}
+                    for key, (t, p) in dsoimages.available().items()}
+        self.update()
+
+    def has_photo(self, key) -> bool:
+        return key in getattr(self, "_ph", {})
+
+    def _photo_tex(self, e, big):
+        k = "big" if big else "small"
+        if e[k] is None:
+            if self._ph_budget <= 0:
+                return e["small"] if big else None
+            self._ph_budget -= 1
+            img = QImage(str(e["path"]))
+            if img.isNull():
+                return None
+            if not big:
+                img = img.scaled(self.PHOTO_SMALL, self.PHOTO_SMALL, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            t = QOpenGLTexture(img.convertToFormat(QImage.Format.Format_RGBA8888))
+            t.setMinificationFilter(QOpenGLTexture.LinearMipMapLinear)
+            t.setMagnificationFilter(QOpenGLTexture.Linear)
+            t.setWrapMode(QOpenGLTexture.ClampToEdge)
+            e[k] = t
+            if big:                       # 大きい写真は、使っていないものから捨てる
+                bigs = sorted((x for x in self._ph.values() if x["big"] is not None), key=lambda x: x["used"])
+                for x in bigs[:max(0, len(bigs) - self.PHOTO_BIG_MAX)]:
+                    x["big"].destroy()
+                    x["big"] = None
+        return e[k]
+
+    def _photo_geom(self, e):
+        """写真の板の中心（太陽中心 [AU]）と、右（西）・上（北）の向き × 半分の大きさ。"""
+        if "geom" not in e:
+            t = e["t"]
+            if t.key.startswith("n:"):
+                pos = neb.NEBULAE[int(t.key[2:])].pos
+            else:
+                pos = gx.BY_KEY[t.key].center
+            if pos is None:
+                return None
+            ra, dec = math.radians(t.ra), math.radians(t.dec)
+            east = astro.equatorial_to_ecliptic(np.array([-math.sin(ra), math.cos(ra), 0.0]))
+            north = astro.equatorial_to_ecliptic(np.array([-math.sin(dec) * math.cos(ra),
+                                                           -math.sin(dec) * math.sin(ra), math.cos(dec)]))
+            half = float(np.linalg.norm(pos)) * math.tan(math.radians(t.fov) / 2)
+            e["geom"] = (np.asarray(pos, float), -east * half, north * half, half)
+        return e["geom"]
+
+    def _update_photo_weights(self, eye, focal):
+        """カメラが地球の側から見ているほど写真を濃く、横や裏から見るときは模式図にする。"""
+        self._photo_w = {}
+        if not self.show_photos or self.ground or not self._ph:
+            return
+        neb_k = 1.0 - _smooth(2e4 * LY_AU, 8e4 * LY_AU, self._sun_far)
+        for key, e in self._ph.items():
+            isneb = key.startswith("n:")
+            if (isneb and (not self.show_nebulae or neb_k <= 0.01)) or (not isneb and not self.show_galaxies):
+                continue
+            if not isneb and self._sun_far < 0.5 * LY_AU:
+                continue
+            g = self._photo_geom(e)
+            if g is None:
+                continue
+            pos, _a1, _a2, half = g
+            c = pos - eye
+            d = float(np.linalg.norm(c))
+            if d <= 0:
+                continue
+            align = float(np.dot(c / d, pos / np.linalg.norm(pos)))
+            w = _smooth(math.cos(math.radians(35)), math.cos(math.radians(12)), align)
+            w *= _smooth(0.12 * half, 0.45 * half, d)          # 近づきすぎたら模式図に
+            if isneb:
+                w *= neb_k
+            if w > 0.01 and half / d * focal > 1.5:
+                self._photo_w[key] = w
+
+    def _draw_photos(self, f, viewproj, eye, focal):
+        if not self._photo_w:
+            return
+        self._ph_budget = 4                      # 1回の描画で読み込む写真の数（引っかからないように）
+        p = self.p_photo
+        p.bind()
+        p.setUniformValue("u_viewproj", _qmat(viewproj))
+        p.setUniformValue1i("u_tex", 0)
+        p.setUniformValue1f("u_flip", float(PHOTO_FLIP))
+        f.glDisable(GL_DEPTH_TEST)
+        f.glBlendFunc(GL_ONE, GL_ONE)
+        now = time.monotonic()
+        for key, w in sorted(self._photo_w.items(), key=lambda kv: kv[1]):
+            e = self._ph[key]
+            pos, a1, a2, half = self._photo_geom(e)
+            c = pos - eye
+            d = float(np.linalg.norm(c))
+            size_px = half / d * focal
+            tex = self._photo_tex(e, size_px > self.PHOTO_SMALL * 0.6)
+            if tex is None:
+                continue
+            e["used"] = now
+            s = 1000.0 / d                          # 遠すぎる座標を float で扱えるように縮める
+            p.setUniformValue("u_center", QVector3D(*(c * s)))
+            p.setUniformValue("u_ax1", QVector3D(*(a1 * s)))
+            p.setUniformValue("u_ax2", QVector3D(*(a2 * s)))
+            p.setUniformValue1f("u_gain", float(w * PHOTO_GAIN))
+            f.glActiveTexture(GL_TEXTURE0)
+            tex.bind(0)
+            self.m_quad.draw(f)
+        p.release()
+        if any(e["big"] is None and e["small"] is None for k, e in self._ph.items() if k in self._photo_w):
+            QTimer.singleShot(30, self.update)        # まだ読み込んでいない写真があれば、続けて描く
 
     def reload_exo(self):
         self.exo = exo.load()
@@ -1289,6 +1425,7 @@ class SpaceView(QOpenGLWidget):
             p.setUniformValue1f("u_boost", float(boost))
             p.setUniformValue1f("u_floor", float(4.0 / g.n * (1.0 - _smooth(2.0, 10.0, r_px))))
             p.setUniformValue1f("u_k", float(g.k))
+            fade *= 1.0 - 0.92 * self._photo_w.get(g.key, 0.0)
             p.setUniformValue1f("u_fade", float(fade))
             # 天の川銀河の中にいるときは、すぐ近くの粒（大きくぼやける）を出さず、遠くの帯だけを見せる
             p.setUniformValue1f("u_near", 2.5 if g.kind == "milkyway" else 0.0)
@@ -1406,6 +1543,7 @@ class SpaceView(QOpenGLWidget):
         f.glEnable(GL_PROGRAM_POINT_SIZE)
         if not self.ground:
             self._draw_far_universe(f, viewproj, eye, sun_rel, sun_far)
+        self._update_photo_weights(eye, focal)
         glow = self._glow_begin(f, w, h)
         if self.show_galaxies and not self.ground:
             self._draw_galaxies(f, viewproj, eye, focal, h)
@@ -1413,6 +1551,8 @@ class SpaceView(QOpenGLWidget):
         f.glBlendFunc(GL_ONE, GL_ONE)
         if glow:
             self._glow_end(f)
+        self._draw_photos(f, viewproj, eye, focal)
+        f.glEnable(GL_DEPTH_TEST)
         if self.show_galaxies and not self.ground:
             p = self.p_gcat
             p.bind()

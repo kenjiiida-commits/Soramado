@@ -24,6 +24,7 @@ labels and event tables can be shown in English: choose **View → 言語 / Lang
 - 系外惑星 約6千個（NASA Exoplanet Archive）：惑星系へ飛んで、惑星の一覧とハビタブルゾーン
 - 人工衛星（CelesTrak）：ISS などが地球のまわりを回る。観測地で見える時刻の一覧
 - クエーサー 約75万個（SDSS）
+- 星雲・銀河の写真 約95個（DSS2 color、ESA ESASky から）：地球の側から見ると本物の写真、横から見ると模式図
 
 **地上から見る（プラネタリウム）**
 - 日本の主な都市や緯度・経度を指定して、その場所・その時刻の空を表示。昼の青空・夕焼け・薄明・夜空

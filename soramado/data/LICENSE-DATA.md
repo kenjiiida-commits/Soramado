@@ -46,3 +46,16 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 位置・見かけの大きさ・種類・明るさは OpenNGC (https://github.com/mattiaverga/OpenNGC) による（CC BY-SA 4.0）。
 距離と日本語の名前・解説はそらみ窓で付けたもの（tools/make_nebula_data.py）。このファイルも CC BY-SA 4.0 で配布する。
+
+## ダウンロードする星雲・銀河の写真（DSS2 color）
+
+「ファイル」→「星雲・銀河の写真をダウンロード…」で取得する写真は、ソフトには含まれていません。
+利用者のパソコンが、ESA の ESASky（<https://cdn.skies.esac.esa.int/DSSColor>）または
+CDS（<https://alasky.cds.unistra.fr/DSS/DSSColor>）が配信している HiPS「DSS2 color」のタイルを
+ダウンロードし、天体ごとに切り出して `~/.local/share/soramado/dso_photos/` に保存します。
+
+- DSS2 color: CDS（ストラスブール天文データセンター）が DSS2 の赤と青の画像から作ったカラー合成
+- The Digitized Sky Surveys were produced at the Space Telescope Science Institute under U.S. Government
+  grant NAG W-2166. The images of these surveys are based on photographic data obtained using the
+  Oschin Schmidt Telescope on Palomar Mountain and the UK Schmidt Telescope.
+  The plates were processed into the present compressed digital form with the permission of these institutions.

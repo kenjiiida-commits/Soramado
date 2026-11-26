@@ -31,6 +31,7 @@ from . import eclipses
 from . import nebulae as neb
 from . import events as evt
 from . import artsat
+from . import dsoimages
 from . import satellites as sats
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
@@ -312,6 +313,9 @@ class MainWindow(QMainWindow):
         act_exof = QAction(tr("系外惑星のデータを手元のファイル（CSV）から読み込む…"), self)
         act_exof.triggered.connect(self._load_exo_file)
         m_file.addAction(act_exof)
+        act_ph = QAction(tr("星雲・銀河の写真をダウンロード…"), self)
+        act_ph.triggered.connect(self._download_photos)
+        m_file.addAction(act_ph)
         m_file.addSeparator()
         act_quit = QAction(tr("終了"), self)
         act_quit.setShortcut(QKeySequence.Quit)
@@ -332,6 +336,7 @@ class MainWindow(QMainWindow):
         self.act_starn = self._toggle(m_view, tr("星の名前"), "show_star_names")
         self.act_neb = self._toggle(m_view, tr("星雲・星団"), "show_nebulae")
         self.act_gal = self._toggle(m_view, tr("銀河"), "show_galaxies")
+        self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
         self.act_small = self._toggle(m_view, tr("準惑星・小惑星・彗星"), "show_small")
         self.act_minor = self._toggle(m_view, tr("たくさんの小惑星・彗星（ダウンロードしたもの）"), "show_minor")
         self.act_exo = self._toggle(m_view, tr("系外惑星を持つ恒星（ダウンロードしたもの）"), "show_exo")
@@ -413,7 +418,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos")
 
     def _restore_settings(self):
         st = self.settings
@@ -426,7 +431,7 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
@@ -691,6 +696,54 @@ class MainWindow(QMainWindow):
 
         timer.timeout.connect(poll)
         self._exo_dl = (dl, timer, dlg)
+        dl.start()
+        timer.start(200)
+
+    def _download_photos(self):
+        if getattr(self, "_ph_dl", None):
+            return
+        dl = dsoimages.PhotoDownloader()
+        if dl.total == 0:
+            QMessageBox.information(self, tr("星雲・銀河の写真"), tr("写真はすべてダウンロード済みです。"))
+            return
+        ans = QMessageBox.question(
+            self, tr("星雲・銀河の写真"),
+            tr("星雲・星団・銀河の本物の写真（DSS2 color）をダウンロードします。\n"
+               "ESA（ESASky）が配信している全天の写真から、天体ごとに切り出して保存します。\n\n"
+               "通信量は約80MB、時間は回線によって数分〜十数分です。よろしいですか？"))
+        if ans != QMessageBox.Yes:
+            return
+        dlg = QProgressDialog(tr("星雲・銀河の写真をダウンロードしています…"), tr("キャンセル"), 0, dl.total, self)
+        dlg.setWindowTitle(tr("星雲・銀河の写真"))
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.canceled.connect(dl.cancel)
+        timer = QTimer(self)
+
+        def poll():
+            dlg.setValue(dl.finished)
+            dlg.setLabelText(trx(f"星雲・銀河の写真をダウンロードしています…\n"
+                                 f"{dl.finished} / {dl.total}　{dl.current}　（{dl.bytes / 1e6:,.1f} MB）"))
+            if not dl.done:
+                return
+            timer.stop()
+            dlg.close()
+            self._ph_dl = None
+            self.view.reload_photos()
+            got = len(self.view._ph)
+            if dl.ok:
+                msg = trx(f"{got} 個の天体の写真を用意しました。") + "\n\n" + tr(
+                    "星雲・銀河を地球の側から見ると、本物の写真で表示されます。横や裏に回ると、粒の模式図に切り替わります。\n"
+                    "「表示」→「星雲・銀河を写真で表示」で、写真を出さないようにもできます。")
+                if dl.failed:
+                    msg += "\n\n" + trx(f"{dl.failed} 個はダウンロードできませんでした（もう一度実行すると、足りない分だけ取りに行きます）。")
+                QMessageBox.information(self, tr("星雲・銀河の写真"), msg)
+            else:
+                QMessageBox.warning(self, tr("星雲・銀河の写真"), tr("ダウンロードできませんでした。\n\n") + dl.message)
+            self._update_panel(force=True)
+
+        timer.timeout.connect(poll)
+        self._ph_dl = (dl, timer, dlg)
         dl.start()
         timer.start(200)
 
@@ -1240,8 +1293,13 @@ class MainWindow(QMainWindow):
                 if n.note:
                     html.append(f"<p>{n.note}</p>")
                 html.append(f"<p><b>{neb.TYPE_JA[n.type]}</b>：{neb.TYPE_NOTE[n.type]}</p>")
-                html.append("<p style='color:#888'>位置・見かけの大きさは OpenNGC、距離は代表的な値の目安です。"
-                            "形は、見かけの大きさと向きに合わせて粒を並べた模式図です（本物の写真ではありません）。</p>")
+                if v.has_photo(t) and v.show_photos:
+                    html.append("<p style='color:#888'>位置・見かけの大きさは OpenNGC、距離は代表的な値の目安です。"
+                                "地球の側から見ると本物の写真、横や裏から見ると粒を並べた模式図になります。<br>"
+                                f"{dsoimages.CREDIT}</p>")
+                else:
+                    html.append("<p style='color:#888'>位置・見かけの大きさは OpenNGC、距離は代表的な値の目安です。"
+                                "形は、見かけの大きさと向きに合わせて粒を並べた模式図です（本物の写真ではありません）。</p>")
             elif v.is_exo(t):
                 i = int(t[2:])
                 sy = v.exo.systems[i]
@@ -1278,6 +1336,9 @@ class MainWindow(QMainWindow):
                 if txt:
                     html.append(f"<p>{txt}</p>")
                 html.append("<p style='color:#888'>" + self.status_info.text().replace("　｜　", "<br>") + "</p>")
+                if v.has_photo(t) and v.show_photos:
+                    html.append("<p style='color:#888'>地球の側から見ると本物の写真、横や裏から見ると模式図になります。<br>"
+                                f"{dsoimages.CREDIT}</p>")
         html.append("</div>")
         if EN_MODE:
             # 数字や単位の入った短い行だけ英語にする（解説の文章は、いまは日本語のまま）
@@ -1548,7 +1609,8 @@ class MainWindow(QMainWindow):
             return
         if v.is_neb(key):
             n = neb.NEBULAE[int(key[2:])]
-            parts = [f"<b>{n.name}</b>"] + neb.describe(n) + [tr("※ 形は模式図")]
+            photo = v.has_photo(key) and v.show_photos
+            parts = [f"<b>{n.name}</b>"] + neb.describe(n) + [tr("写真（DSS2）と模式図") if photo else tr("※ 形は模式図")]
             parts.append(f"視点の距離 {_fmt_dist(v.dist)}")
             self._set_status("　｜　".join(parts))
             self._refresh_warn(v)

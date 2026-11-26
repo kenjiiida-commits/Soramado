@@ -146,6 +146,10 @@ def tr(s: str) -> str:
 
 # 組み立てた文の言い回し（長いものから順に置きかえる）
 _PHRASES = [
+    ("星雲・銀河の写真をダウンロードしています…", "Downloading photos of nebulae & galaxies…"),
+    ("個の天体の写真を用意しました。", " objects now have photos."),
+    ("個はダウンロードできませんでした（もう一度実行すると、足りない分だけ取りに行きます）。",
+     " could not be downloaded (run it again to fetch only the missing ones)."),
     ("観測できる宇宙の果て", "Edge of the observable universe"),
     ("（これから15年・観測地 ", " (next 15 years, "), ("（これから1年・観測地 ", " (next year, "),
     ("（これから10日・観測地 ", " (next 10 days, "), ("（これから1年あまり・観測地 ", " (next ~1 year, "),
@@ -276,6 +280,25 @@ EN.update({
     "（小惑星・系外惑星はダウンロードしたときだけ、英語の名前で探せます）":
     "Enter a name or number.\nExamples: Orion, Pleiades, M42, Itokawa, Ryugu, 433, Halley, TRAPPIST-1\n"
     "(Asteroids and exoplanets can be found only after downloading them.)",
+})
+EN.update({
+    "星雲・銀河を写真で表示（ダウンロードしたもの）": "Show nebulae && galaxies as photos (downloaded)",
+    "星雲・銀河の写真をダウンロード…": "Download photos of nebulae && galaxies…",
+    "星雲・銀河の写真": "Photos of nebulae & galaxies",
+    "写真はすべてダウンロード済みです。": "All photos have already been downloaded.",
+    "星雲・星団・銀河の本物の写真（DSS2 color）をダウンロードします。\n"
+    "ESA（ESASky）が配信している全天の写真から、天体ごとに切り出して保存します。\n\n"
+    "通信量は約80MB、時間は回線によって数分〜十数分です。よろしいですか？":
+    "Download real photos (DSS2 color) of nebulae, clusters and galaxies.\n"
+    "Each object is cut out of the all-sky survey served by ESA (ESASky) and saved.\n\n"
+    "About 80 MB will be downloaded (several minutes or more). Continue?",
+    "星雲・銀河の写真をダウンロードしています…": "Downloading photos of nebulae & galaxies…",
+    "星雲・銀河を地球の側から見ると、本物の写真で表示されます。横や裏に回ると、粒の模式図に切り替わります。\n"
+    "「表示」→「星雲・銀河を写真で表示」で、写真を出さないようにもできます。":
+    "Seen from Earth's side, nebulae and galaxies are shown as real photos; from the side or behind they switch to particle models.\n"
+    "You can turn photos off in View → Show nebulae & galaxies as photos.",
+    "ダウンロードできませんでした。\n\n": "Download failed.\n\n",
+    "写真（DSS2）と模式図": "Photo (DSS2) and model",
 })
 SHOWER_PARENTS_EN = {"qua": "Asteroid 2003 EH1", "lyr": "Comet Thatcher (C/1861 G1)", "eta": "Comet Halley",
                      "sda": "Comet 96P/Machholz", "per": "Comet 109P/Swift–Tuttle", "dra": "Comet 21P/Giacobini–Zinner",
