@@ -318,6 +318,15 @@ EN.update({
     "大気の効果（地上モード：浮き上がり・減光・空の色）": "Atmosphere (ground mode: refraction, extinction, sky colour)",
     "いまの日付では、この探査機は飛んでいません。": "The spacecraft is not flying on the current date.",
     "できごとを押すと、その日へ移ります。": "Click an event to jump to that date.",
+    "1恒星日ずつ（星を止める）": "1 sidereal day per step (stars fixed)",
+    "1太陽日ずつ（太陽を止める）": "1 solar day per step (Sun fixed)",
+    "🌑 大気なし": "🌑 No air",
+    "地上から見るとき、空気も地面もないものとして見ます（昼でも星が見え、地平線の下も見える）":
+    "In ground view, show the sky as if there were no air and no ground (stars in daytime, sky below the horizon)",
+    "大気なし：空気も地面もないものとして見ています（昼でも星が見え、地平線の下も見えます）":
+    "No air: viewing as if there were no air and no ground (stars in daytime, sky below the horizon)",
+    "1秒に ": "", " 日": " days/s", "コマ送りで、1秒に何日分進めるか": "Days advanced per second when stepping",
+    "惑星と月の通った跡（地上モード）": "Paths of planets && the Moon (ground view)", "通った跡を消す": "Clear paths",
     "地上の風景": "Landscape", "自分の360°写真を読み込む…": "Load my own 360° photo…",
     "風景は「地上から見る」のときに出ます": "The landscape appears in \"View from ground\"",
     "360°写真（正距円筒図）を選ぶ": "Choose a 360° photo (equirectangular)", "画像 (*.png *.jpg *.jpeg *.webp)": "Images (*.png *.jpg *.jpeg *.webp)",

@@ -263,6 +263,13 @@ class SpaceView(QOpenGLWidget):
         self.show_mwphoto = True
         self.show_atmosphere = True
         self.landscape = None          # 地上の風景（landscape.Landscape）
+        self.airless = False           # 大気なし（地上モード）: 黒い空・地面なし・大気の効果なし
+        self.step_unit = None          # コマ送りの1コマ [日]（恒星日・太陽日）。None は普通の再生
+        self.step_rate = 10.0          # コマ送りで1秒に進む日数
+        self._step_acc = 0.0
+        self.show_trails = True        # 地上モードで、惑星と月の通った跡を残す
+        self._trails = {}              # 天体 → [(JD, 方向)]
+        self._trail_jd = None
         self._land_dirty = False    # 地上モードで大気の効果（大気差・減光・空の色）をつける
         self.show_star_trails = True   # 星の位置の時代を変えたとき、今の位置からの動きを線で出す
         self.m_trails = None
@@ -704,7 +711,14 @@ class SpaceView(QOpenGLWidget):
             dt = now - self._last_tick
             self._last_tick = now
         now = self.now()
-        if not self.paused and self.speed != 0:
+        if not self.paused and self.step_unit:
+            # コマ送り: 1恒星日（星が止まって見える）か1太陽日（太陽が止まって見える）ずつ飛ぶ
+            self._step_acc += dt * self.step_rate * (1.0 if self.speed >= 0 else -1.0)
+            n = int(self._step_acc)
+            if n:
+                self._step_acc -= n
+                self.set_jd(self.jd + n * self.step_unit)
+        elif not self.paused and self.speed != 0:
             self.set_jd(self.jd + dt * self.speed / 86400.0)
         if self._fly:
             fl = self._fly
@@ -947,6 +961,8 @@ class SpaceView(QOpenGLWidget):
         m = absmag + 5 * math.log10(max(clip[3], 1e-9) / 206264.806 / 10.0)
         li = -0.4 * (m - self.limit_mag)
         glow_px = max(core_px * 3.0, min(28.0, 2.5 + 2.2 * li))
+        if self.ground and self.airless:
+            glow_px = max(core_px * 1.6, 4.0)       # 大気なし: まぶしさを小さくして、そばの星も見えるように
         glow_k = min(1.0, 0.3 + 0.35 * li)
         if glow_px <= 1.5:
             return
@@ -1649,6 +1665,7 @@ class SpaceView(QOpenGLWidget):
             self._fov = self.g_fov
             off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
             self._gframe = (zen, north, east)
+            self._record_trails()
             eye = self.positions["earth"] + off
             fwd = self._ground_dir(self.g_az, self.g_alt)
             up0 = zen
@@ -1699,10 +1716,11 @@ class SpaceView(QOpenGLWidget):
             zen = self._gframe[0]
             sun_dir = sun_rel / np.linalg.norm(sun_rel)
             self._sun_alt = math.degrees(math.asin(max(-1.0, min(1.0, float(np.dot(sun_dir, zen))))))
-            self._draw_sky(f, 0, w, h)
-            # 空が明るいほど星は見えない
-            night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky
-            limit = self.limit_mag - (1.0 - night) * 7.0
+            if not self.airless:
+                self._draw_sky(f, 0, w, h)
+                # 空が明るいほど星は見えない
+                night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky
+                limit = self.limit_mag - (1.0 - night) * 7.0
         self._night = night
 
         # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
@@ -1955,7 +1973,7 @@ class SpaceView(QOpenGLWidget):
         f.glDisable(GL_BLEND)
         f.glDisable(GL_DEPTH_TEST)
 
-        if self.ground:
+        if self.ground and not self.airless:
             self._draw_sky(f, 1, w, h)
             self._draw_landscape(f, w, h)
         self._draw_overlay(rel, viewproj, w, h)
@@ -1965,7 +1983,7 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- 大気（地上モード）
 
     def _atm_on(self) -> bool:
-        return self.ground and self.show_atmosphere
+        return self.ground and self.show_atmosphere and not self.airless
 
     def _atm_refract(self, rel):
         """大気差: 地平線近くの天体を少し浮き上がらせる（シェーダーの atmRefract と同じ計算）。"""
@@ -2006,7 +2024,7 @@ class SpaceView(QOpenGLWidget):
             p.release()
 
     def _project(self, v, viewproj, w, h):
-        if self.ground and self.show_atmosphere and getattr(self, "_gframe", None) is not None:
+        if self._atm_on() and getattr(self, "_gframe", None) is not None:
             v = self._atm_refract(v)
         c = viewproj @ np.append(v, 1.0)
         if c[3] <= 0:
@@ -2095,6 +2113,7 @@ class SpaceView(QOpenGLWidget):
                 a = dr * 0.7
                 placed.append(QRect(int(dx - a), int(dy - a), int(2 * a), int(2 * a)))
         if self.ground:
+            self._draw_trails(painter, viewproj, w, h)
             self._draw_compass(painter, viewproj, w, h, placed, fm)
         else:
             self._draw_neb_labels(painter, viewproj, w, h, placed, fm, focal)
@@ -2192,8 +2211,8 @@ class SpaceView(QOpenGLWidget):
 
     def _above(self, direction, margin=0.0) -> bool:
         """地上モードで、その方向が地平線（風景があれば、山や建物）より上か。"""
-        if not self.ground:
-            return True
+        if not self.ground or self.airless:
+            return True                 # 大気なしでは地面がないので、地平線の下も見える
         d = np.asarray(direction, dtype=np.float64)
         d = d / max(float(np.linalg.norm(d)), 1e-30)
         sn = float(np.dot(d, self._gframe[0]))
@@ -2206,9 +2225,63 @@ class SpaceView(QOpenGLWidget):
             alt += 1.02 / math.tan(math.radians(max(alt, -1.5) + 10.3 / (max(alt, -1.5) + 5.11))) / 60.0 if alt > -3 else 0.0
         return alt > max(self.landscape.height_at(az), -math.degrees(margin))
 
+    TRAIL_KEYS = ("mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune", "moon")
+
+    def clear_trails(self):
+        self._trails = {}
+        self._trail_jd = None
+        self.update()
+
+    def _record_trails(self):
+        """地球から見た惑星・月の方向を記録する（星座の中を動いていく通り道）。"""
+        if not (self.ground and self.show_trails):
+            return
+        last = self._trail_jd
+        if last is not None and abs(self.jd - last) > 45:      # 日付を大きく変えたら、跡を消してやり直す
+            self._trails = {}
+            last = None
+        if last is not None and abs(self.jd - last) < 0.5:
+            return
+        earth = self.positions["earth"]
+        for k in self.TRAIL_KEYS:
+            d = self.display_pos(k) - earth
+            pts = self._trails.setdefault(k, [])
+            pts.append(d / np.linalg.norm(d))
+            if len(pts) > 1500:
+                del pts[0]
+        self._trail_jd = self.jd
+
+    def _draw_trails(self, painter, viewproj, w, h):
+        if not (self.ground and self.show_trails and self._trails):
+            return
+        for k, pts in self._trails.items():
+            if len(pts) < 2:
+                continue
+            col = QColor.fromRgbF(*BY_KEY[k].color)
+            col.setAlpha(170)
+            painter.setPen(QPen(col, 1.4))
+            prev = None
+            for d in pts:
+                pr = self._sky_xy(d, viewproj, w, h) if self._above(d) else None
+                if pr and prev and k != "moon" and abs(pr[0] - prev[0]) < w / 4 and abs(pr[1] - prev[1]) < h / 4:
+                    painter.drawLine(QPointF(prev[0], prev[1]), QPointF(pr[0], pr[1]))
+                elif pr and k == "moon":
+                    painter.drawEllipse(QPointF(pr[0], pr[1]), 1.6, 1.6)
+                prev = pr
+
     def _draw_compass(self, painter, viewproj, w, h, placed, fm):
         """地平線上の方角（北・東・南・西など）。"""
         zen, north, east = self._gframe
+        if self.airless:
+            # 地面がないので、地平線を細い線で引く
+            painter.setPen(QPen(QColor(120, 160, 110, 170), 1.2))
+            prev = None
+            for k in range(0, 361, 2):
+                a = math.radians(k)
+                pr = self._sky_xy(math.cos(a) * north + math.sin(a) * east, viewproj, w, h)
+                if pr and prev and abs(pr[0] - prev[0]) < w and abs(pr[1] - prev[1]) < h:
+                    painter.drawLine(QPointF(prev[0], prev[1]), QPointF(pr[0], pr[1]))
+                prev = pr
         font = painter.font()
         big = QFont(font)
         big.setPointSizeF(font.pointSizeF() * 1.4)

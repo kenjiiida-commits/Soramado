@@ -50,7 +50,10 @@ SPEEDS = [
     (tr("1週間/秒"), 604800.0),
     (tr("1か月/秒"), 2629800.0),
     (tr("1年/秒"), 31557600.0),
+    (tr("1恒星日ずつ（星を止める）"), "sidereal"),
+    (tr("1太陽日ずつ（太陽を止める）"), "solar"),
 ]
+SIDEREAL_DAY = 0.99726956633       # 1恒星日 [日]（23時間56分4.1秒）
 DEFAULT_SPEED = 5   # 1日/秒
 
 PLACES = [
@@ -205,6 +208,12 @@ class MainWindow(QMainWindow):
         self.btn_ground.setCheckable(True)
         self.btn_ground.toggled.connect(self._on_ground)
         tb.addWidget(self.btn_ground)
+        self.btn_airless = QPushButton(tr("🌑 大気なし"))
+        self.btn_airless.setCheckable(True)
+        self.btn_airless.setEnabled(False)
+        self.btn_airless.setToolTip(tr("地上から見るとき、空気も地面もないものとして見ます（昼でも星が見え、地平線の下も見える）"))
+        self.btn_airless.toggled.connect(self._on_airless)
+        tb.addWidget(self.btn_airless)
         self.cb_place = QComboBox()
         for name, lat, lon in PLACES:
             self.cb_place.addItem(name, (name, lat, lon))
@@ -235,6 +244,16 @@ class MainWindow(QMainWindow):
         self.cb_speed.setCurrentIndex(DEFAULT_SPEED)
         self.cb_speed.currentIndexChanged.connect(self._apply_speed)
         tb.addWidget(self.cb_speed)
+        from PySide6.QtWidgets import QSpinBox
+        self.sp_step = QSpinBox()
+        self.sp_step.setRange(1, 100)
+        self.sp_step.setValue(10)
+        self.sp_step.setPrefix(tr("1秒に "))
+        self.sp_step.setSuffix(tr(" 日"))
+        self.sp_step.setToolTip(tr("コマ送りで、1秒に何日分進めるか"))
+        self.sp_step.valueChanged.connect(self._apply_speed)
+        self.act_sp_step = tb.addWidget(self.sp_step)
+        self.act_sp_step.setVisible(False)
 
         btn_now = QPushButton(tr("現在時刻"))
         btn_now.clicked.connect(lambda: self.view.set_jd(astro.jd_now()))
@@ -349,6 +368,10 @@ class MainWindow(QMainWindow):
         self.act_photo = self._toggle(m_view, tr("星雲・銀河を写真で表示（ダウンロードしたもの）"), "show_photos")
         self.act_mwphoto = self._toggle(m_view, tr("天の川を写真で表示（ダウンロードしたもの）"), "show_mwphoto")
         self.act_atm = self._toggle(m_view, tr("大気の効果（地上モード：浮き上がり・減光・空の色）"), "show_atmosphere")
+        self.act_trails = self._toggle(m_view, tr("惑星と月の通った跡（地上モード）"), "show_trails")
+        act_ct = QAction(tr("通った跡を消す"), self)
+        act_ct.triggered.connect(self.view.clear_trails)
+        m_view.addAction(act_ct)
         m_land = m_view.addMenu(tr("地上の風景"))
         from PySide6.QtGui import QActionGroup
         self._land_grp = QActionGroup(self)
@@ -467,7 +490,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 設定の保存と復元
 
     _VIEW_FLAGS = ("show_orbits", "show_labels", "show_stars", "show_con_lines", "show_con_names",
-                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto", "show_atmosphere")
+                   "show_star_names", "show_galaxies", "show_small", "show_craft", "show_quasars", "show_cmb", "show_minor", "show_exo", "show_nebulae", "show_artsat", "show_photos", "show_mwphoto", "show_atmosphere", "show_trails")
 
     def _restore_settings(self):
         st = self.settings
@@ -480,13 +503,17 @@ class MainWindow(QMainWindow):
         acts = {"show_orbits": self.act_orbits, "show_labels": self.act_labels, "show_stars": self.act_stars,
                 "show_con_lines": self.act_conl, "show_con_names": self.act_conn, "show_star_names": self.act_starn,
                 "show_galaxies": self.act_gal, "show_small": self.act_small, "show_craft": self.act_craft,
-                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto, "show_atmosphere": self.act_atm}
+                "show_quasars": self.act_qso, "show_cmb": self.act_cmb, "show_minor": self.act_minor, "show_exo": self.act_exo, "show_nebulae": self.act_neb, "show_artsat": self.act_artsat, "show_photos": self.act_photo, "show_mwphoto": self.act_mwphoto, "show_atmosphere": self.act_atm, "show_trails": self.act_trails}
         for name, act in acts.items():
             val = st.value(f"view/{name}")
             if val is not None:
                 act.setChecked(str(val).lower() in ("true", "1"))
         if st.value("view/limit") is not None:
             self.sl_stars.setValue(int(st.value("view/limit")))
+        try:
+            self.sp_step.setValue(int(st.value("time/step_rate", 10)))
+        except (TypeError, ValueError):
+            pass
         ls = str(st.value("view/landscape", "none"))
         try:
             if ls.startswith("file|"):
@@ -519,6 +546,7 @@ class MainWindow(QMainWindow):
             st.setValue(f"view/{name}", bool(getattr(self.view, name)))
         st.setValue("view/limit", self.sl_stars.value())
         st.setValue("view/mw_level", self.view.mw_level)
+        st.setValue("time/step_rate", self.sp_step.value())
         st.setValue("view/magnify", self.sl_mag.value())
         st.setValue("time/speed", self.cb_speed.currentIndex())
         if not self.view.ground:
@@ -1967,10 +1995,17 @@ class MainWindow(QMainWindow):
         self.btn_all.setEnabled(not on)
         self.sl_mag.setEnabled(not on)
         self.btn_ground.setText(tr("🚀 宇宙へ戻る") if on else tr("🔭 地上から見る"))
-        # 1日/秒より速いと空がぐるぐる回って見づらいので、地上では少しゆっくりにする
-        if on and self.cb_speed.currentIndex() > 3:
+        self.btn_airless.setEnabled(on)
+        # 1日/秒より速いと空がぐるぐる回って見づらいので、地上では少しゆっくりにする（コマ送りはそのまま）
+        if on and self.cb_speed.currentIndex() > 3 and not isinstance(SPEEDS[self.cb_speed.currentIndex()][1], str):
             self.cb_speed.setCurrentIndex(1)
         self.view.setFocus()
+
+    def _on_airless(self, on):
+        self.view.airless = on
+        self.view.update()
+        if on:
+            self.statusBar().showMessage(tr("大気なし：空気も地面もないものとして見ています（昼でも星が見え、地平線の下も見えます）"), 8000)
 
     def _restore_place(self):
         name = self.settings.value("place/name", tr("大阪"))
@@ -2059,7 +2094,17 @@ class MainWindow(QMainWindow):
 
     def _apply_speed(self, *_):
         s = SPEEDS[self.cb_speed.currentIndex()][1]
-        self.view.speed = -s if self.chk_reverse.isChecked() else s
+        v = self.view
+        if isinstance(s, str):
+            # コマ送り: 恒星日ずつなら星座が止まって見え、惑星の動き（逆行など）が分かる
+            v.step_unit = SIDEREAL_DAY if s == "sidereal" else 1.0
+            v.step_rate = float(self.sp_step.value())
+            v.speed = -1.0 if self.chk_reverse.isChecked() else 1.0
+            self.act_sp_step.setVisible(True)
+        else:
+            v.step_unit = None
+            v.speed = -s if self.chk_reverse.isChecked() else s
+            self.act_sp_step.setVisible(False)
 
     def _on_magnify(self, v):
         m = 10 ** (v / 100.0)
