@@ -115,6 +115,15 @@ for _b in ("moon", "mars"):
               lambda: w.btn_scope.setChecked(False), lambda: w.btn_ground.click(), wait, lambda: v._finish_lift()]
 # 台本（見本を流して途中で止める・間違いのある台本・英語の命令）
 from soramado import script as _scr
+def _chk(cond, msg):
+    if not cond: errs.append(msg)
+# 火星にいるときに台本を始めても、地球から始まる。行き先のない「着陸」は、見ている天体へ
+steps += [lambda: w._set_body("mars", animate=False), lambda: w.play_script("待つ 0.1", "reset"),
+          lambda: _chk(v.ground_body == "earth", "script did not reset to earth"), lambda: w.stop_tour(),
+          lambda: w._set_ground_checked(False), lambda: v.set_target("moon", fly=False),
+          lambda: w.play_script("着陸", "land-moon"), wait, lambda: v._finish_lift(),
+          lambda: _chk(v.ground_body == "moon", "plain land did not go to moon: " + v.ground_body),
+          lambda: w.stop_tour(), lambda: w._reset_to_earth()]
 steps += [lambda: w.play_script(_scr.SAMPLE, "見本"), wait, wait, wait, wait, wait, lambda: w._tour_go(1),
           wait, wait, lambda: w.stop_tour(), lambda: w.play_script("とぶ 月\n待つ x", "bad"),
           lambda: w.play_script("fly jupiter\norbit 30 1\nzoom 10au\ncaption hi\nwait 0.5\nland moon\n"

@@ -1996,13 +1996,17 @@ class MainWindow(QMainWindow):
         lay.addWidget(b)
         self.tour_bar.hide()
 
-    def start_tour(self, tid):
+    def _reset_to_earth(self):
+        """月や火星に降りているときは、すぐに地球の観測点へ戻す（ツアーや台本は地球から始める）。"""
         if self.view.ground_body != "earth":
             self._set_ground_checked(False)
             self.cb_body.setCurrentIndex(0)
             self._fill_places("earth")
             self.view.set_ground_body("earth")
             self._select_place(self.view.place, self.view.lat, self.view.lon)
+
+    def start_tour(self, tid):
+        self._reset_to_earth()
         for t, title, fn in tours.TOURS:
             if t == tid:
                 steps = fn(self.view) if tid in ("tonight", "asteroids", "exoplanets") else fn()
@@ -2121,6 +2125,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("台本"), tr("台本に書き方の間違いがあります。\n\n") + str(exc))
             return False
         self.stop_tour()
+        self._reset_to_earth()
         self._script = {"cmds": cmds, "i": 0, "title": title, "until": None, "move": False, "orbit": None}
         self.tour_label.setText("")
         self.tour_bar.show()
@@ -2374,7 +2379,11 @@ class MainWindow(QMainWindow):
     def _script_land(self, a):
         v, s = self.view, self._script
         bodies = {"地球": "earth", "earth": "earth", "月": "moon", "moon": "moon", "火星": "mars", "mars": "mars"}
-        body = bodies.get(a[0].lower(), None) if a else v.ground_body
+        if a:
+            body = bodies.get(a[0].lower(), None)
+        else:
+            # 行き先を書かないときは、いま見ている天体（地球・月・火星）に降りる。それ以外なら地球
+            body = v.target if v.target in ("earth", "moon", "mars") else "earth"
         if body is None:
             raise ValueError(trx(f"「{a[0]}」には降りられません（地球・月・火星）"))
         rest = " ".join(a[1:])
