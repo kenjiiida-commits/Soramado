@@ -232,6 +232,8 @@ class MainWindow(QMainWindow):
         for key, label in (("earth", "🌏 地球"), ("moon", "🌕 月"), ("mars", "🔴 火星")):
             self.cb_body.addItem(tr(label), key)
         self.cb_body.setToolTip(tr("地上モードで立つ天体（月や火星にも降り立てます）"))
+        self.cb_body.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.cb_body.setMinimumContentsLength(4)
         self.cb_body.activated.connect(lambda i: self._set_body(self.cb_body.itemData(i)))
         tb.addWidget(self.cb_body)
         self.cb_place = QComboBox()
