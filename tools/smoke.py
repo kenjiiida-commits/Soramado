@@ -113,6 +113,15 @@ for _b in ("moon", "mars"):
     steps += [lambda: v.look_at("earth"), lambda: v.look_at("sun"), lambda: w.btn_airless.setChecked(True),
               lambda: w.btn_airless.setChecked(False), lambda: w.btn_scope.setChecked(True), lambda: v.look_at("jupiter"),
               lambda: w.btn_scope.setChecked(False), lambda: w.btn_ground.click(), wait, lambda: v._finish_lift()]
+# 台本（見本を流して途中で止める・間違いのある台本・英語の命令）
+from soramado import script as _scr
+steps += [lambda: w.play_script(_scr.SAMPLE, "見本"), wait, wait, wait, wait, wait, lambda: w._tour_go(1),
+          wait, wait, lambda: w.stop_tour(), lambda: w.play_script("とぶ 月\n待つ x", "bad"),
+          lambda: w.play_script("fly jupiter\norbit 30 1\nzoom 10au\ncaption hi\nwait 0.5\nland moon\n"
+                                "look earth\nfov 10\nscope dob200 9\nscope なし\nlines 黄道 on\nairless on\n"
+                                "airless off\ntime sunset\nfly ないもの\nland earth 大阪\nplace 35.36 138.73\n", "en"),
+          wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, lambda: w.stop_tour(),
+          lambda: w._set_ground_checked(False)]
 steps += [lambda: v.set_target("mars", fly=False), lambda: w._land_request("mars", 10.0, 200.0), wait, wait,
           lambda: v._finish_lift(), lambda: w.btn_ground.click(), lambda: v._finish_lift(),
           lambda: v.set_target("moon", fly=False), lambda: v._surface_at("moon", 500, 350),

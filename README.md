@@ -62,6 +62,7 @@ sudo apt install ./soramado_*_all.deb
 - 日本の主な都市や緯度・経度を指定して、その場所・その時刻の空を表示。昼の青空・夕焼け・薄明・夜空
 - 月・火星に降り立つ：アポロの着陸地点やオリンポス山の山頂などから空を見る（月から見た地球の満ち欠け、火星の青い夕焼け）
 - 天体望遠鏡モード・空の線（黄道・天の赤道・子午線・目盛り）・光害・風景・地上と宇宙を飛んで行き来
+- 台本で自動上映：テキストに「飛ぶ 木星」「待つ 3」「字幕 …」「着陸 月」と書くと、そのとおりに動き、そのまま動画にもできる
 - 星座の名前をダブルクリックすると、88星座すべての見ごろ・見つけ方・神話や由来
 
 **天文現象**（「天文現象」メニュー）
@@ -183,6 +184,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - **Land on the Moon and Mars** — Apollo sites, Olympus Mons, Jezero crater and more, with real NASA terrain (LRO/LOLA and MGS/MOLA): watch the Earth's phases from the Moon, or Martian blue sunsets.
 - **Sky lines** — ecliptic with the Sun's monthly positions, celestial equator, meridian and alt-azimuth grid.
 - Time control (fast-forward, reverse, sidereal/solar day stepping, planet trails), guided tours, screenshots and video recording.
+- **Scripted shows** — write a plain-text script ("fly jupiter", "wait 3", "caption …", "land moon") and Soramado performs it, optionally recording a video.
 
 **Install:** download the `.deb` from the [latest release](https://github.com/kenjiiida-commits/Soramado/releases/latest) and run `sudo apt install ./soramado_*_all.deb`. Requires Ubuntu 25.04 or later and OpenGL 3.3.
 

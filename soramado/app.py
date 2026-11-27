@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +41,7 @@ from .constellation_info import INFO as CON_INFO
 from . import satellites as sats
 from . import scope as scopes
 from . import terrain
+from . import script as scr
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -143,6 +144,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._tour = None
         self._tour_deadline = None
+        self._script = None
         self._rec = None
         self._rec_tour = False
         self._tour_timer = QTimer(self)        # 場面の切り替えは、ビューの時計で判定する
@@ -515,6 +517,19 @@ class MainWindow(QMainWindow):
             act = QAction(tr(title), self)
             act.triggered.connect(lambda _=False, t=tid: self.record_tour(t))
             m_rec.addAction(act)
+        m_tour.addSeparator()
+        act_sp = QAction(tr("台本を再生…"), self)
+        act_sp.triggered.connect(lambda: self.play_script_file(False))
+        m_tour.addAction(act_sp)
+        act_sr = QAction(tr("台本を再生して録画…"), self)
+        act_sr.triggered.connect(lambda: self.play_script_file(True))
+        m_tour.addAction(act_sr)
+        act_ss = QAction(tr("台本の見本を保存…"), self)
+        act_ss.triggered.connect(self._save_script_sample)
+        m_tour.addAction(act_ss)
+        act_sx = QAction(tr("台本の見本をそのまま再生"), self)
+        act_sx.triggered.connect(lambda: self.play_script(scr.SAMPLE, tr("台本の見本")))
+        m_tour.addAction(act_sx)
         m_tour.addSeparator()
         act_stop = QAction(tr("ツアーを終わる"), self)
         act_stop.setShortcut(QKeySequence("Esc"))
@@ -1997,6 +2012,9 @@ class MainWindow(QMainWindow):
                 return
 
     def stop_tour(self):
+        if self._script:
+            self._stop_script()
+            return
         if not self._tour:
             return
         self._tour = None
@@ -2007,11 +2025,19 @@ class MainWindow(QMainWindow):
             self.btn_rec.setChecked(False)
 
     def _tour_check(self):
+        if self._script:
+            self._script_tick()
+            return
         if self._tour and self._tour_deadline is not None and self.view.now() >= self._tour_deadline:
             self._tour_deadline = None
             self._tour_go(+1)
 
     def _tour_go(self, d):
+        if self._script:
+            if d > 0:                       # 台本: 待っているところを飛ばす
+                self._script["until"] = None
+                self._script["orbit"] = None
+            return
         tr = self._tour
         if not tr:
             return
@@ -2060,6 +2086,330 @@ class MainWindow(QMainWindow):
         v.update()
 
     # ---------------------------------------------------------- 地上モード
+
+    # ---------------------------------------------------------- 台本で自動上映
+
+    def _save_script_sample(self):
+        path, _ = QFileDialog.getSaveFileName(self, tr("台本の見本を保存"), str(Path.home() / "soramado_daihon.txt"),
+                                              tr("台本 (*.txt)"))
+        if not path:
+            return
+        try:
+            Path(path).write_text(scr.SAMPLE, encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, tr("台本"), str(exc))
+            return
+        QMessageBox.information(self, tr("台本"), trx(
+            f"見本を保存しました。\n{path}\n\nテキストエディターで書きかえて、「ツアー」→「台本を再生」で動かせます。"))
+
+    def play_script_file(self, record=False):
+        path, _ = QFileDialog.getOpenFileName(self, tr("台本を開く"), str(Path.home()),
+                                              tr("台本 (*.txt *.soramado);;すべてのファイル (*)"))
+        if not path:
+            return
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            QMessageBox.warning(self, tr("台本"), tr("台本を読めませんでした。\n\n") + str(exc))
+            return
+        self.play_script(text, Path(path).stem, record)
+
+    def play_script(self, text, title, record=False):
+        try:
+            cmds = scr.parse(text)
+        except scr.ScriptError as exc:
+            QMessageBox.warning(self, tr("台本"), tr("台本に書き方の間違いがあります。\n\n") + str(exc))
+            return False
+        self.stop_tour()
+        self._script = {"cmds": cmds, "i": 0, "title": title, "until": None, "move": False, "orbit": None}
+        self.tour_label.setText("")
+        self.tour_bar.show()
+        if record and not self.btn_rec.isChecked():
+            self._rec_tour = True
+            self.btn_rec.setChecked(True)
+        self._script_tick()
+        return True
+
+    def _stop_script(self, done=False):
+        s, self._script = self._script, None
+        if s is None:
+            return
+        self.tour_bar.hide()
+        if self._rec_tour and self.btn_rec.isChecked():
+            self._rec_tour = False
+            self.btn_rec.setChecked(False)
+        if done:
+            self.statusBar().showMessage(trx(f"台本「{s['title']}」の再生が終わりました"), 6000)
+
+    def _script_tick(self):
+        s = self._script
+        v = self.view
+        now = v.now()
+        if s["orbit"]:
+            rate, last = s["orbit"]
+            if not v.ground:
+                v.yaw += math.radians(rate) * max(0.0, now - last)
+                v.update()
+            s["orbit"] = [rate, now]
+        if s["until"] is not None and now < s["until"]:
+            return
+        if s["move"] and (v._fly or v.lifting()):
+            return
+        s["until"], s["move"], s["orbit"] = None, False, None
+        cmds = s["cmds"]
+        while s["i"] < len(cmds):
+            c = cmds[s["i"]]
+            s["i"] += 1
+            self.tour_count.setText(f"{s['title']}　{s['i']} / {len(cmds)}")
+            try:
+                waits = self._script_run(c)
+            except Exception as exc:  # noqa: BLE001  1つの命令で止めず、知らせて次へ
+                self.statusBar().showMessage(trx(f"台本 {c.line}行目: {exc}"), 8000)
+                waits = False
+            if self._script is not s:
+                return
+            if waits:
+                return
+        self._stop_script(done=True)
+
+    def _script_key(self, name):
+        """名前（ツールバーの「見る天体」の表示か、英語名・記号）から天体の記号を探す。"""
+        n = name.strip()
+        nl = n.lower()
+        best = None
+        for i in range(self.cb_target.count()):
+            key = self.cb_target.itemData(i)
+            if not key:
+                continue
+            text = self.cb_target.itemText(i).replace("　", "").replace("🛰 ", "").replace("✦ ", "").strip()
+            if n == text or nl == str(key).lower():
+                return key
+            if best is None and (n in text or (len(nl) > 2 and nl in text.lower())):
+                best = key
+        from .i18n import NAMES_EN
+        for key, en in NAMES_EN.items():
+            if nl == en.lower() and self.view.valid_key(key):
+                return key
+        if best:
+            return best
+        raise ValueError(trx(f"「{name}」という天体が見つかりません"))
+
+    def _sun_event(self, kind):
+        """いまの観測地で、次の日の出前（太陽の高さ -4度）・日の入り前（+4度）の時刻にする。"""
+        v = self.view
+        jd0 = v.jd
+        want = 4.0 if kind == "set" else -4.0
+        step = 10.0 / 1440.0
+        prev = v.ground_altaz("sun")[0]
+        for k in range(1, 6 * 144 + 1):             # 6日先まで（火星の1日は地球の約1.03日）
+            v.set_jd(jd0 + k * step)
+            alt = v.ground_altaz("sun")[0]
+            if (kind == "set" and prev > want >= alt) or (kind == "rise" and prev < want <= alt):
+                return
+            prev = alt
+        v.set_jd(jd0)
+        raise ValueError(tr("太陽が出入りする時刻が見つかりません（極地では、ずっと昼や夜のことがあります）"))
+
+    def _script_run(self, c):
+        """命令を1つ実行する。終わるのを待つ命令なら True。"""
+        v, s, op, a = self.view, self._script, c.op, c.args
+        now = v.now()
+        if op == "時刻":
+            t = c.text.strip()
+            if t in ("日の入り", "sunset", "日の出", "sunrise"):
+                if not v.ground:
+                    raise ValueError(tr("「時刻 日の入り」は地上にいるときに使えます"))
+                self._sun_event("set" if t in ("日の入り", "sunset") else "rise")
+            else:
+                jd = scr.parse_time(t)
+                v.set_jd(astro.jd_from_datetime(datetime.now(timezone.utc)) if jd == "now" else jd)
+        elif op == "速さ":
+            want = c.text.strip()
+            for i, (label, _sp) in enumerate(SPEEDS):
+                if want in (label, tr(want)) or label.startswith(want):
+                    self.cb_speed.setCurrentIndex(i)
+                    break
+            else:
+                raise ValueError(trx(f"速さ「{want}」がありません"))
+            if v.paused:
+                self._toggle_pause()
+        elif op in ("止める", "動かす"):
+            if v.paused != (op == "止める"):
+                self._toggle_pause()
+        elif op == "場所":
+            self._script_place(c)
+        elif op == "地上":
+            if a:
+                self._script_place(c)
+            if not self.btn_ground.isChecked():
+                self._keep_body = True
+                try:
+                    self._set_ground_checked(True)
+                finally:
+                    self._keep_body = False
+        elif op == "宇宙へ":
+            if self.btn_ground.isChecked():
+                self.btn_ground.setChecked(False)
+                s["move"] = True
+                return True
+        elif op == "着陸":
+            return self._script_land(a)
+        elif op == "飛ぶ":
+            mult = 1.0
+            name = c.text
+            if len(a) > 1:
+                try:
+                    mult = float(a[-1])
+                    name = " ".join(a[:-1])
+                except ValueError:
+                    pass
+            key = self._script_key(name)
+            if self.btn_ground.isChecked():
+                self._set_ground_checked(False)
+            view_dir = None
+            if key in BY_KEY and key != "sun":
+                # 太陽の光が当たる側から、少しななめに見る（夜の側の真っ黒な面にならないように）
+                p = v.display_pos(key)
+                ds = v.display_pos("sun") - p
+                ds /= np.linalg.norm(ds)
+                side = np.cross(np.array([0.0, 0.0, 1.0]), ds)
+                side /= max(np.linalg.norm(side), 1e-9)
+                view_dir = ds * math.cos(math.radians(50)) + side * math.sin(math.radians(50)) + np.array([0, 0, 0.35])
+                view_dir /= np.linalg.norm(view_dir)
+            v.fly_to(key, v._default_dist(key) * mult, view_dir=view_dir)
+            s["move"] = True
+            return True
+        elif op == "引く":
+            if self.btn_ground.isChecked():
+                self._set_ground_checked(False)
+            v.fly_to(v.target, scr.parse_distance(c.text))
+            s["move"] = True
+            return True
+        elif op == "回る":
+            s["orbit"] = [float(a[0]), now]
+            s["until"] = now + float(a[1])
+            return True
+        elif op == "向く":
+            if not v.ground:
+                raise ValueError(tr("「向く」は地上にいるときに使えます"))
+            d = scr.look_direction(a)
+            if d is None:
+                key = self._script_key(c.text)
+                if not v.look_at(key):
+                    alt, az = v.ground_altaz(key)
+                    v.g_az, v.g_alt = math.radians(az), math.radians(max(alt, 5.0))
+            else:
+                v.g_az, v.g_alt = math.radians(d[0]), math.radians(d[1])
+            v.update()
+        elif op == "視野":
+            v.g_fov = max(0.5, min(140.0, float(a[0])))
+            v.update()
+        elif op == "待つ":
+            s["until"] = now + float(a[0])
+            return True
+        elif op == "字幕":
+            self.tour_label.setText(c.text)
+        elif op == "望遠鏡":
+            if a[0] in ("なし", "off", "オフ", "やめる"):
+                self.btn_scope.setChecked(False)
+            else:
+                i = self.cb_scope.findData(a[0])
+                if i < 0:
+                    raise ValueError(trx(f"望遠鏡「{a[0]}」がありません（例: bino7, ref80, dob200）"))
+                self.cb_scope.setCurrentIndex(i)
+                if len(a) > 1:
+                    mm = float(a[1].lower().replace("mm", ""))
+                    best = min(range(len(scopes.EYEPIECES)), key=lambda k: abs(scopes.EYEPIECES[k].focal - mm))
+                    self.cb_eye.setCurrentIndex(best)
+                self._keep_body = True
+                try:
+                    self.btn_scope.setChecked(True)
+                finally:
+                    self._keep_body = False
+                self._apply_scope_ui()
+        elif op == "大気なし":
+            self.btn_airless.setChecked(scr.parse_onoff(a[0]))
+        elif op == "線":
+            attr = scr.LINES[a[0].lower()]
+            act = {"show_ecliptic": self.act_ecl, "show_equator": self.act_equ, "show_meridian": self.act_mer,
+                   "show_altaz": self.act_altaz}[attr]
+            act.setChecked(scr.parse_onoff(a[1]))
+        elif op == "録画":
+            start = a[0] in ("開始", "start")
+            if start != self.btn_rec.isChecked():
+                self.btn_rec.setChecked(start)
+        return False
+
+    def _script_place(self, c):
+        v = self.view
+        a = c.args
+        if len(a) >= 2:
+            try:
+                lat, lon = float(a[0]), float(a[1])
+            except ValueError:
+                lat = None
+            if lat is not None:
+                name = " ".join(a[2:]) or trx(f"緯度 {lat:.2f}・経度 {lon:.2f}")
+                if v.ground_body == "earth":
+                    v.set_place(name, lat, lon)
+                    self._select_place(name, lat, lon)
+                else:
+                    v.set_ground_body(v.ground_body, name, lat, lon)
+                return
+        name = c.text.strip()
+        if v.ground_body == "earth":
+            for pn, lat, lon in PLACES:
+                if name in (pn, tr(pn)) or pn.startswith(name):
+                    v.set_place(pn, lat, lon)
+                    self._select_place(pn, lat, lon)
+                    return
+        else:
+            for pn, lat, lon in terrain.PLACES[v.ground_body]:
+                if name in (pn, tr(pn)) or name in pn:
+                    v.set_ground_body(v.ground_body, tr(pn), lat, lon)
+                    self._select_place(tr(pn), lat, lon)
+                    return
+        raise ValueError(trx(f"場所「{name}」が見つかりません（緯度 経度 の数字でも書けます）"))
+
+    def _script_land(self, a):
+        v, s = self.view, self._script
+        bodies = {"地球": "earth", "earth": "earth", "月": "moon", "moon": "moon", "火星": "mars", "mars": "mars"}
+        body = bodies.get(a[0].lower(), None) if a else v.ground_body
+        if body is None:
+            raise ValueError(trx(f"「{a[0]}」には降りられません（地球・月・火星）"))
+        rest = " ".join(a[1:])
+        if body == "earth":
+            if v.ground_body != "earth":
+                self.cb_body.setCurrentIndex(0)
+                self._fill_places("earth")
+                v.set_ground_body("earth")
+                self._select_place(v.place, v.lat, v.lon)
+            if rest:
+                from types import SimpleNamespace
+                self._script_place(SimpleNamespace(args=rest.split(), text=rest))
+            if not self.btn_ground.isChecked():
+                self._keep_body = True
+                try:
+                    self.btn_ground.setChecked(True)
+                finally:
+                    self._keep_body = False
+        else:
+            place = None
+            if rest:
+                for pn, lat, lon in terrain.PLACES[body]:
+                    if rest in (pn, tr(pn)) or rest in pn or rest in tr(pn):
+                        place = (tr(pn), lat, lon)
+                        break
+                else:
+                    nums = rest.split()
+                    try:
+                        lat, lon = float(nums[0]), float(nums[1])
+                        place = (trx(f"緯度 {lat:.2f}・経度 {lon:.2f}"), lat, lon)
+                    except (ValueError, IndexError):
+                        raise ValueError(trx(f"場所「{rest}」が見つかりません"))
+            self._set_body(body, place, animate=True)
+        s["move"] = True
+        return True
 
     # ---- 天体望遠鏡モード
 
