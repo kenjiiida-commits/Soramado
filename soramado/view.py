@@ -360,6 +360,7 @@ class SpaceView(QOpenGLWidget):
         self._vclock = 0.0
         self._on_frame = None
 
+        self.script_orbit = None     # 台本の「回る」：(角速度[rad/s], 終わる時刻)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(16)
@@ -1178,10 +1179,15 @@ class SpaceView(QOpenGLWidget):
                 self._fly = None
         if self._lift:
             self._apply_lift()
+        if self.script_orbit and not self.ground:
+            rate, end = self.script_orbit
+            self.yaw += rate * max(0.0, min(now, end) - (now - dt))
+            if now >= end:
+                self.script_orbit = None
         if self.recording and self._on_frame:
             # 1コマずつ確実に描いて、録画に渡す
             self._on_frame(self.grabFramebuffer())
-        elif (not self.paused or self._fly or self._lift or self._idle_frames < 2 or self._meteor_live
+        elif (not self.paused or self._fly or self._lift or self.script_orbit or self._idle_frames < 2 or self._meteor_live
               or getattr(self, "_line_fading", False)):
             QOpenGLWidget.update(self)
             self._idle_frames = 0 if (not self.paused or self._fly or self._lift) else self._idle_frames + 1

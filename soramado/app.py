@@ -638,7 +638,7 @@ class MainWindow(QMainWindow):
     def _load_landscape_file(self, path=None, north=None, save=True):
         from PySide6.QtWidgets import QInputDialog
         if not path:
-            path, _ = QFileDialog.getOpenFileName(
+            path, _ = self._fd(QFileDialog.getOpenFileName, 
                 self, tr("360°写真（正距円筒図）を選ぶ"), str(Path.home()),
                 tr("画像 (*.png *.jpg *.jpeg *.webp)"))
             if not path:
@@ -815,7 +815,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 小惑星・彗星のダウンロードと検索
 
     def _load_minor_files(self):
-        files, _ = QFileDialog.getOpenFileNames(
+        files, _ = self._fd(QFileDialog.getOpenFileNames, 
             self, tr("JPL の軌道要素の表を選ぶ（ELEMENTS.NUMBR(.gz) と ELEMENTS.COMET）"), str(Path.home() / tr("ダウンロード")),
             tr("軌道要素の表 (ELEMENTS.* *.gz *.txt);;すべてのファイル (*)"))
         if files:
@@ -871,7 +871,7 @@ class MainWindow(QMainWindow):
         timer.start(200)
 
     def _load_exo_file(self):
-        f, _ = QFileDialog.getOpenFileName(self, tr("NASA Exoplanet Archive の表（CSV）を選ぶ"), str(Path.home() / tr("ダウンロード")),
+        f, _ = self._fd(QFileDialog.getOpenFileName, self, tr("NASA Exoplanet Archive の表（CSV）を選ぶ"), str(Path.home() / tr("ダウンロード")),
                                            tr("CSV (*.csv);;すべてのファイル (*)"))
         if f:
             self._download_exo(f)
@@ -1996,6 +1996,20 @@ class MainWindow(QMainWindow):
         lay.addWidget(b)
         self.tour_bar.hide()
 
+    def _fd(self, fn, *args, **kw):
+        """ファイルを選ぶ画面を出すあいだは、宇宙の描き直しを止める。
+        重い場面を描き続けていると、選ぶ画面が固まったように見える（「応答がありません」が出る）ため。"""
+        v = self.view
+        timers = [t for t in (v._timer, self._tour_timer) if t.isActive()]
+        for t in timers:
+            t.stop()
+        try:
+            return fn(*args, **kw)
+        finally:
+            v._last_tick = time.monotonic()
+            for t in timers:
+                t.start()
+
     def _reset_to_earth(self):
         """月や火星に降りているときは、すぐに地球の観測点へ戻す（ツアーや台本は地球から始める）。"""
         if self.view.ground_body != "earth":
@@ -2041,6 +2055,7 @@ class MainWindow(QMainWindow):
             if d > 0:                       # 台本: 待っているところを飛ばす
                 self._script["until"] = None
                 self._script["orbit"] = None
+                self.view.script_orbit = None
             return
         tr = self._tour
         if not tr:
@@ -2094,7 +2109,7 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- 台本で自動上映
 
     def _save_script_sample(self):
-        path, _ = QFileDialog.getSaveFileName(self, tr("台本の見本を保存"), str(Path.home() / "soramado_daihon.txt"),
+        path, _ = self._fd(QFileDialog.getSaveFileName, self, tr("台本の見本を保存"), str(Path.home() / "soramado_daihon.txt"),
                                               tr("台本 (*.txt)"))
         if not path:
             return
@@ -2107,7 +2122,7 @@ class MainWindow(QMainWindow):
             f"見本を保存しました。\n{path}\n\nテキストエディターで書きかえて、「ツアー」→「台本を再生」で動かせます。"))
 
     def play_script_file(self, record=False):
-        path, _ = QFileDialog.getOpenFileName(self, tr("台本を開く"), str(Path.home()),
+        path, _ = self._fd(QFileDialog.getOpenFileName, self, tr("台本を開く"), str(Path.home()),
                                               tr("台本 (*.txt *.soramado);;すべてのファイル (*)"))
         if not path:
             return
@@ -2139,6 +2154,7 @@ class MainWindow(QMainWindow):
         s, self._script = self._script, None
         if s is None:
             return
+        self.view.script_orbit = None
         self.tour_bar.hide()
         if self._rec_tour and self.btn_rec.isChecked():
             self._rec_tour = False
@@ -2150,17 +2166,12 @@ class MainWindow(QMainWindow):
         s = self._script
         v = self.view
         now = v.now()
-        if s["orbit"]:
-            rate, last = s["orbit"]
-            if not v.ground:
-                v.yaw += math.radians(rate) * max(0.0, now - last)
-                v.update()
-            s["orbit"] = [rate, now]
         if s["until"] is not None and now < s["until"]:
             return
         if s["move"] and (v._fly or v.lifting()):
             return
         s["until"], s["move"], s["orbit"] = None, False, None
+        v.script_orbit = None
         cmds = s["cmds"]
         while s["i"] < len(cmds):
             c = cmds[s["i"]]
@@ -2291,8 +2302,10 @@ class MainWindow(QMainWindow):
             s["move"] = True
             return True
         elif op == "回る":
-            s["orbit"] = [float(a[0]), now]
+            s["orbit"] = True
             s["until"] = now + float(a[1])
+            # 回すのはビューの1コマごと（録画でもカクつかないように）
+            v.script_orbit = (math.radians(float(a[0])), s["until"])
             return True
         elif op == "向く":
             if not v.ground:
