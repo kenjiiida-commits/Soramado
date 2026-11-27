@@ -94,6 +94,29 @@ steps += [lambda: v.look_at("moon"), lambda: v.look_at("saturn"), lambda: w.btn_
           lambda: w.btn_airless.setChecked(False), lambda: w.chk_track.setChecked(False), lambda: v.set_jd(v.jd + 0.01),
           lambda: w.btn_ground.click(), lambda: v._finish_lift(), lambda: w.btn_scope.setChecked(True),
           lambda: w.btn_scope.setChecked(False), lambda: w._set_ground_checked(False)]
+# 月・火星に降り立つ（地形データなし → 試験用の地形あり、場所をすべて、宇宙から着陸、ダブルクリックで着陸、望遠鏡、ツアーで地球へ）
+import numpy as _np
+from soramado import terrain as _T
+def _fake_dem():
+    for b in ("moon", "mars"):
+        _T._cache[b] = (_np.random.default_rng(1).normal(0, 800, (_T.H // 16, _T.W // 16)).astype(_np.int16)
+                        .repeat(16, 0).repeat(16, 1))
+    v.reload_terrain = lambda: None
+    if v.ground_body != "earth":
+        v._build_terrain()
+steps += [lambda: w._set_body("moon"), wait, wait, lambda: v._finish_lift(), lambda: w._set_body("mars"),
+          lambda: setattr(v, "g_alt", -0.5), lambda: setattr(v, "g_alt", 1.5), lambda: v.set_jd(v.jd + 0.3),
+          lambda: w._set_body("earth"), lambda: w._set_ground_checked(False), _fake_dem]
+for _b in ("moon", "mars"):
+    steps += [(lambda b=_b: w._set_body(b, animate=False))]
+    steps += [(lambda i=i: (w.cb_place.setCurrentIndex(i), w._on_place(i))) for i in range(len(_T.PLACES[_b]))]
+    steps += [lambda: v.look_at("earth"), lambda: v.look_at("sun"), lambda: w.btn_airless.setChecked(True),
+              lambda: w.btn_airless.setChecked(False), lambda: w.btn_scope.setChecked(True), lambda: v.look_at("jupiter"),
+              lambda: w.btn_scope.setChecked(False), lambda: w.btn_ground.click(), wait, lambda: v._finish_lift()]
+steps += [lambda: v.set_target("mars", fly=False), lambda: w._land_request("mars", 10.0, 200.0), wait, wait,
+          lambda: v._finish_lift(), lambda: w.btn_ground.click(), lambda: v._finish_lift(),
+          lambda: v.set_target("moon", fly=False), lambda: v._surface_at("moon", 500, 350),
+          lambda: w.start_tour(tours.TOURS[0][0]), lambda: w.stop_tour(), lambda: w._set_ground_checked(False)]
 for i in range(w.cb_target.count()):
     k = w.cb_target.itemData(i)
     if k: steps.append(lambda k=k: v.set_target(k, fly=False))
@@ -102,6 +125,8 @@ def step():
     if i["n"] >= len(steps):
         if v.lifting():
             errs.append("lift did not finish")
+        if v.ground_body != "earth":
+            errs.append("still on " + v.ground_body)
         if v.scope is not None or w.btn_scope.isChecked():
             errs.append("scope still on")
         print("steps", len(steps), "errors", len(errs))

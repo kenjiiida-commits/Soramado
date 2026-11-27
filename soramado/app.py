@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer, QUrl
+from PySide6.QtCore import QCoreApplication, QDateTime, QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QImage, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDockWidget,
                                QFrame, QTextBrowser, QVBoxLayout,
@@ -39,6 +40,7 @@ from . import landscape
 from .constellation_info import INFO as CON_INFO
 from . import satellites as sats
 from . import scope as scopes
+from . import terrain
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -226,12 +228,17 @@ class MainWindow(QMainWindow):
         self.btn_scope.setToolTip(tr("地上から、天体望遠鏡や双眼鏡でのぞいたように見ます"))
         tb.addWidget(self.btn_scope)
         self._build_scope_bar()
+        self.cb_body = QComboBox()
+        for key, label in (("earth", "🌏 地球"), ("moon", "🌕 月"), ("mars", "🔴 火星")):
+            self.cb_body.addItem(tr(label), key)
+        self.cb_body.setToolTip(tr("地上モードで立つ天体（月や火星にも降り立てます）"))
+        self.cb_body.activated.connect(lambda i: self._set_body(self.cb_body.itemData(i)))
+        tb.addWidget(self.cb_body)
         self.cb_place = QComboBox()
-        for name, lat, lon in PLACES:
-            self.cb_place.addItem(name, (name, lat, lon))
-        self.cb_place.addItem(tr("緯度・経度を入力…"), None)
+        self._fill_places("earth")
         self.cb_place.activated.connect(self._on_place)
         tb.addWidget(self.cb_place)
+        self.view.landRequest.connect(self._land_request)
         tb.addSeparator()
 
         self.btn_rec = QPushButton(tr("⏺ 録画"))
@@ -357,6 +364,11 @@ class MainWindow(QMainWindow):
         act_mw = QAction(tr("天の川の写真（Gaia）をダウンロード…"), self)
         act_mw.triggered.connect(self._download_mwphoto)
         m_file.addAction(act_mw)
+        for body in ("moon", "mars"):
+            nm = terrain.body_name(body)
+            a = QAction(f"Download the {nm} terrain (elevation data)…" if EN_MODE else f"{nm}の地形（標高のデータ）をダウンロード…", self)
+            a.triggered.connect(lambda _c=False, b=body: self._download_terrain_menu(b))
+            m_file.addAction(a)
         m_file.addSeparator()
         act_quit = QAction(tr("終了"), self)
         act_quit.setShortcut(QKeySequence.Quit)
@@ -1842,6 +1854,10 @@ class MainWindow(QMainWindow):
                     html.append(f"<li>{v.stars.short_name(i)}（{v.stars.mag[i]:.1f}等）</li>")
                 html.append("</ul>")
             html.append(tr("<p style='color:#888'>星座の名前をダブルクリックすると選べます。ほかの場所をダブルクリックすると選択が外れます。</p>"))
+        elif v.ground and v.ground_body != "earth":
+            html.append(self._body_sky_html(v))
+            if v.target in BY_KEY and text_for(v.target):
+                html.append(f"<h3>{BY_KEY[v.target].name}</h3><p>{text_for(v.target)}</p>")
         elif v.ground:
             html.append(tr("<h2>地上から見た空</h2>"))
             html.append(f"<p>{v.place}（北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）から見上げた空です。</p>"
@@ -1963,6 +1979,12 @@ class MainWindow(QMainWindow):
         self.tour_bar.hide()
 
     def start_tour(self, tid):
+        if self.view.ground_body != "earth":
+            self._set_ground_checked(False)
+            self.cb_body.setCurrentIndex(0)
+            self._fill_places("earth")
+            self.view.set_ground_body("earth")
+            self._select_place(self.view.place, self.view.lat, self.view.lon)
         for t, title, fn in tours.TOURS:
             if t == tid:
                 steps = fn(self.view) if tid in ("tonight", "asteroids", "exoplanets") else fn()
@@ -2117,6 +2139,11 @@ class MainWindow(QMainWindow):
 
     def _set_ground_checked(self, on):
         """プログラムから地上モードを切りかえる（ツアーや日食の場面では、飛ばずにすぐ切りかえる）。"""
+        if on and self.view.ground_body != "earth" and not getattr(self, "_keep_body", False):
+            self.cb_body.setCurrentIndex(0)          # ツアー・日食・今夜の空は、地球の地上で見る
+            self._fill_places("earth")
+            self.view.set_ground_body("earth")
+            self._select_place(self.view.place, self.view.lat, self.view.lon)
         self._ground_instant = True
         try:
             self.btn_ground.setChecked(on)
@@ -2147,31 +2174,171 @@ class MainWindow(QMainWindow):
         lat = float(self.settings.value("place/lat", 34.69))
         lon = float(self.settings.value("place/lon", 135.50))
         self.view.set_place(name, lat, lon)
+        self._select_place(name, lat, lon)
+
+    def _fill_places(self, body):
+        self.cb_place.clear()
+        items = PLACES if body == "earth" else [(tr(n), la, lo) for n, la, lo in terrain.PLACES[body]]
+        for name, lat, lon in items:
+            self.cb_place.addItem(name, (name, lat, lon))
+        self.cb_place.addItem(tr("緯度・経度を入力…"), None)
+
+    def _select_place(self, name, lat, lon):
         i = self.cb_place.findText(name)
         if i < 0:
             self.cb_place.insertItem(self.cb_place.count() - 1, name, (name, lat, lon))
             i = self.cb_place.findText(name)
+        else:
+            self.cb_place.setItemData(i, (name, lat, lon))
         self.cb_place.setCurrentIndex(i)
 
     def _on_place(self, i):
         data = self.cb_place.itemData(i)
+        body = self.view.ground_body
         if data is None:
             data = self._ask_place()
             if data is None:
-                self.cb_place.setCurrentIndex(self.cb_place.findText(self.view.place))
+                cur = self.view.place if body == "earth" else tr(self.view.gb_place)
+                self.cb_place.setCurrentIndex(max(0, self.cb_place.findText(cur)))
                 return
-            j = self.cb_place.findText(data[0])
-            if j < 0:
-                self.cb_place.insertItem(self.cb_place.count() - 1, data[0], data)
-                j = self.cb_place.findText(data[0])
-            else:
-                self.cb_place.setItemData(j, data)
-            self.cb_place.setCurrentIndex(j)
+            self._select_place(*data)
         name, lat, lon = data
+        if body != "earth":
+            self.view.set_ground_body(body, name, lat, lon)
+            if not self.btn_ground.isChecked():
+                self.btn_ground.setChecked(True)
+            return
         self.view.set_place(name, lat, lon)
         self.settings.setValue("place/name", name)
         self.settings.setValue("place/lat", lat)
         self.settings.setValue("place/lon", lon)
+
+    def _body_sky_html(self, v):
+        real = terrain.available(v.ground_body)
+        src = tr(terrain.SOURCES[v.ground_body].credit)
+        if EN_MODE:
+            pl = v.ground_place_name()
+            if v.ground_body == "moon":
+                t = ("<h2>The sky from the Moon</h2>"
+                     f"<p>{pl} (lat {v.gb_lat:+.2f}°, lon {v.gb_lon:+.2f}°).</p>"
+                     "<p>The Moon has no air, so the sky is black even in daytime and the stars are always visible. "
+                     "Seen from the near side, the Earth stays at almost the same place in the sky and goes through phases "
+                     "over about 29.5 days — one lunar day. From the far side, the Earth is never seen.</p>")
+            else:
+                t = ("<h2>The sky from Mars</h2>"
+                     f"<p>{pl} (lat {v.gb_lat:+.2f}°, lon {v.gb_lon:+.2f}°).</p>"
+                     "<p>Fine dust makes the daytime sky butterscotch, while sunsets turn blue around the Sun. "
+                     "A day on Mars (a sol) lasts about 24 h 40 min. The two small moons Phobos and Deimos cross the sky, "
+                     "and the Earth shines as a bright morning or evening star.</p>")
+            t += f"<p style='color:#888'>Terrain: {src}" if real else \
+                "<p style='color:#888'>Terrain: smooth ground (download the real terrain from the File menu)"
+            return t + "</p>"
+        pl = v.ground_place_name()
+        if v.ground_body == "moon":
+            t = ("<h2>月面から見た空</h2>"
+                 f"<p>{pl}（緯度 {v.gb_lat:+.2f}°・経度 {v.gb_lon:+.2f}°）</p>"
+                 "<p>月には空気がないので、昼でも空は真っ黒で、いつでも星が見えます。"
+                 "表側からは、地球が空のほぼ同じ場所にとどまり、約29.5日（月の1日）かけて満ち欠けします。"
+                 "裏側からは、地球は見えません。</p>")
+        else:
+            t = ("<h2>火星から見た空</h2>"
+                 f"<p>{pl}（緯度 {v.gb_lat:+.2f}°・経度 {v.gb_lon:+.2f}°）</p>"
+                 "<p>昼の空は、細かいちりで黄土色（バタースコッチ色）に見えます。夕焼けは逆に、太陽のまわりが青くなります。"
+                 "火星の1日は約24時間40分。小さな2つの月フォボスとダイモスが空を動き、地球は明るい明けの明星・宵の明星として見えます。</p>")
+        t += f"<p style='color:#888'>地形: {src}" if real else \
+            "<p style='color:#888'>地形: なだらかな地面（「ファイル」メニューから本物の地形をダウンロードできます）"
+        return t + "</p>"
+
+    def _set_body(self, body, place=None, animate=True):
+        """地上モードで立つ天体を変える（月・火星なら、地形のデータを用意する）。"""
+        v = self.view
+        if body != "earth" and not terrain.available(body) and not self._ask_terrain(body):
+            pass                       # ダウンロードしなくても、なだらかな地面で降りられる
+        self.cb_body.setCurrentIndex(max(0, self.cb_body.findData(body)))
+        self._fill_places(body)
+        if body == "earth":
+            v.set_ground_body("earth")
+            self._select_place(v.place, v.lat, v.lon)
+        else:
+            name, lat, lon = place or (tr(terrain.PLACES[body][0][0]),) + terrain.PLACES[body][0][1:]
+            self._select_place(name, lat, lon)
+            # 宇宙からなら、その天体へ着陸する。地上（地球など）にいるなら、すぐに移る
+            v.set_ground_body(body, name, lat, lon)
+        if not self.btn_ground.isChecked():
+            self._keep_body = True
+            try:
+                if animate:
+                    self.btn_ground.setChecked(True)
+                else:
+                    self._set_ground_checked(True)
+            finally:
+                self._keep_body = False
+        self._update_panel(force=True)
+        self.view.setFocus()
+
+    def _ask_terrain(self, body):
+        """地形のデータをダウンロードするか聞いて、するならダウンロードする。"""
+        src = terrain.SOURCES[body]
+        nm = terrain.body_name(body)
+        if EN_MODE:
+            title = f"{nm} terrain"
+            msg = (f"Download the real terrain (elevation data) of the {nm}?\n\n{tr(src.credit)}\n"
+                   f"About {src.size_mb:.0f} MB.\n\nIf you skip this, you will land on smooth ground "
+                   "(you can download it later from the File menu).")
+        else:
+            title = f"{nm}の地形"
+            msg = (f"{nm}の本物の地形（標高のデータ）をダウンロードしますか？\n\n{src.credit}\n"
+                   f"通信量は約{src.size_mb:.0f}MB です。\n\n"
+                   "ダウンロードしないときは、なだらかな地面に降りることになります（あとで「ファイル」メニューからダウンロードできます）。")
+        if QMessageBox.question(self, title, msg) != QMessageBox.Yes:
+            return False
+        return self._download_terrain(body)
+
+    def _download_terrain(self, body):
+        dl = terrain.Downloader(body)
+        nm = terrain.body_name(body)
+        title = f"{nm} terrain" if EN_MODE else f"{nm}の地形"
+        label = f"Downloading the {nm} terrain…" if EN_MODE else f"{nm}の地形をダウンロードしています…"
+        dlg = QProgressDialog(label, tr("キャンセル"), 0, 1000, self)
+        dlg.setWindowTitle(title)
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.canceled.connect(dl.cancel)
+        dl.start()
+        while not dl.done:
+            QCoreApplication.processEvents()
+            dlg.setValue(int(1000 * min(1.0, dl.bytes / max(dl.total, 1))))
+            dlg.setLabelText(f"{label}\n{dl.bytes / 1e6:,.1f} / {dl.total / 1e6:,.1f} MB")
+            time.sleep(0.05)
+        dlg.close()
+        if dl.ok:
+            self.view.reload_terrain()
+            self._update_panel(force=True)
+            return True
+        if "キャンセル" not in dl.message:
+            QMessageBox.warning(self, title, tr("ダウンロードできませんでした。\n\n") + dl.message)
+        return False
+
+    def _download_terrain_menu(self, body):
+        if self._download_terrain(body):
+            nm = terrain.body_name(body)
+            QMessageBox.information(self, tr("地形"), f"The {nm} terrain is ready." if EN_MODE else f"{nm}の地形を用意しました。")
+
+    @staticmethod
+    def _latlon_text(lat, lon):
+        lon = lon % 360.0
+        if EN_MODE:
+            return f"{abs(lat):.1f}°{'N' if lat >= 0 else 'S'}, {lon:.1f}°E"
+        return (f"北緯 {lat:.1f}°" if lat >= 0 else f"南緯 {-lat:.1f}°") + f"・東経 {lon:.1f}°"
+
+    def _land_request(self, body, lat, lon):
+        """宇宙から月・火星をダブルクリックした場所に降り立つ。"""
+        nm = terrain.body_name(body)
+        where = self._latlon_text(lat, lon)
+        msg = f"Land on the {nm} at {where}?" if EN_MODE else f"{nm}の {where} に降り立ちますか？"
+        if QMessageBox.question(self, tr("降り立つ"), msg) != QMessageBox.Yes:
+            return
+        self._set_body(body, (where, lat, ((lon + 180) % 360) - 180))
 
     def _ask_place(self):
         dlg = QDialog(self)
@@ -2338,7 +2505,10 @@ class MainWindow(QMainWindow):
             self._refresh_warn(v)
             return
         if v.ground:
-            parts = [f"<b>地上から見た空</b>（{v.place}　北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）"]
+            if v.ground_body != "earth":
+                parts = [f"<b>{v.ground_place_name()}</b>（{v.gb_lat:+.2f}°・{v.gb_lon:+.2f}°）"]
+            else:
+                parts = [f"<b>地上から見た空</b>（{v.place}　北緯 {v.lat:.2f}°・東経 {v.lon:.2f}°）"]
             sun_alt, _ = v.ground_altaz("sun")
             if sun_alt > 0:
                 parts.append(f"太陽の高度 {sun_alt:.0f}°（昼）")

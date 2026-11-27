@@ -36,9 +36,17 @@ Recommends: ffmpeg
 Maintainer: Kenji Iida <kenjiiida-commits@users.noreply.github.com>
 Homepage: https://github.com/kenjiiida-commits/Soramado
 Description: Space simulator for Ubuntu (Soramado)
- そらみ窓は、太陽系を3Dで自由に旅できる宇宙シミュレーターです。
- 惑星は実際の日付どおりの位置で公転し、時間の早送りや逆再生もできます。
- 約12万個の恒星と星座線も表示します。
+ Soramado is a 3D space simulator in the spirit of Mitaka. Travel freely
+ from the solar system to the large-scale structure of the universe.
+ .
+ Planets, moons, comets and 20 spacecraft move at their real positions for
+ any date, with fast-forward and reverse. About 120,000 stars, constellation
+ lines and photos of nebulae, galaxies and the Milky Way are shown.
+ .
+ In ground mode you can watch the sky from anywhere on Earth with
+ atmosphere, light pollution, landscapes and sky lines, look through
+ telescopes and binoculars, or land on the Moon and Mars with real NASA
+ terrain data. The user interface is Japanese and English.
 CTRL
 
 cat > "$ROOT/DEBIAN/postinst" <<'SH'

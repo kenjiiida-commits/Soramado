@@ -457,6 +457,7 @@ uniform float u_sunlight;  // 日食のとき、太陽が見えている割合�
 uniform float u_lp;        // 光害の強さ（0〜1）
 uniform int u_mode;        // 0=空, 1=地面
 uniform float u_air;       // 空気の濃さ（1 = 地上、0 = 宇宙）。高く昇るほど空が暗くなる
+uniform int u_planet;      // 0 = 地球, 1 = 火星
 out vec4 frag;
 void main() {
     vec3 ray = normalize(u_fwd + v_ndc.x * u_tx * u_right + v_ndc.y * u_ty * u_up);
@@ -520,6 +521,16 @@ void main() {
     // 光害: 街の明かりが空気で散らされて、地平線ほど明るい橙色に（昼は青空に埋もれる）
     float lpk = u_lp * (1.0 - dayk);
     col += vec3(0.16, 0.11, 0.065) * lpk * (0.3 + 0.7 * exp(-a * 3.0));
+    if (u_planet == 1) {
+        // 火星の空: 昼は細かいちりで黄土色（バタースコッチ色）。太陽のまわりは青白く、夕焼けは青い
+        vec3 mDay = mix(vec3(0.40, 0.27, 0.17), vec3(0.78, 0.60, 0.42), 1.0 - exp(-0.35 * (X - 1.0)));
+        float lowM = 1.0 - smoothstep(0.0, 25.0, u_sunalt);
+        mDay += vec3(0.30, 0.50, 0.95) * (pow(near, 30.0) * 0.9 + pow(near, 6.0) * 0.25) * (0.4 + 0.6 * lowM);
+        mDay += vec3(1.0, 0.95, 0.85) * pow(near, 400.0);
+        vec3 mTwi = vec3(0.22, 0.40, 0.85) * pow(near, 4.0) * smoothstep(-16.0, -1.0, u_sunalt) * 0.55;
+        mTwi += vec3(0.004, 0.0035, 0.004) * exp(-a * 4.0);
+        col = mix(mTwi, mDay, smoothstep(-4.0, 10.0, u_sunalt) * u_sunlight);
+    }
     // 空気がうすくなると、青空 → 藍色 → 黒い宇宙へ（青い光ほど最後まで残る）
     col *= vec3(pow(u_air, 1.25), pow(u_air, 1.1), u_air);
     frag = vec4(col, 1.0);
@@ -840,5 +851,78 @@ void main() {
     vec3 col = c.rgb * u_light;
     if (u_has_emit == 1) col += textureGrad(u_emit, vec2(u0, v), gx, gy).rgb * u_night;
     frag = vec4(col, c.a);
+}
+"""
+
+
+# ---------------------------------------------------------------- 月・火星の地形
+TERRAIN_VS = """#version 330 core
+layout(location=0) in vec3 a_pos;       // 目からの位置 [km]（天体の座標軸）
+layout(location=1) in vec3 a_nrm;
+layout(location=2) in vec2 a_uv;
+uniform mat4 u_rot;                     // 天体の座標軸 → 黄道座標（回転だけ）
+uniform float u_km;                     // km → AU
+uniform mat4 u_viewproj;
+""" + LOGDEPTH_VS + """
+out vec3 v_n;
+out vec2 v_uv;
+out float v_dist;
+out vec3 v_local;
+void main() {
+    vec3 w = mat3(u_rot) * (a_pos * u_km);
+    v_n = mat3(u_rot) * a_nrm;
+    v_uv = a_uv;
+    v_dist = length(a_pos);
+    v_local = a_pos;
+    gl_Position = u_viewproj * vec4(w, 1.0);
+    v_logz = 1.0 + u_logc * gl_Position.w;
+}
+"""
+
+TERRAIN_FS = """#version 330 core
+in vec3 v_n;
+in vec2 v_uv;
+in float v_dist;
+in vec3 v_local;
+""" + LOGDEPTH_FS + """
+uniform sampler2D u_tex;
+uniform vec3 u_sundir;       // 太陽の方向
+uniform vec3 u_zen;          // 天頂
+uniform float u_sunvis;      // 太陽が見えている割合（日食など）
+uniform int u_planet;        // 0 = 月, 1 = 火星
+uniform vec3 u_haze;         // 遠くがかすむ色（火星のちり）
+uniform float u_earthshine;  // 地球の明かり（月の夜）
+out vec4 frag;
+
+float hash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+float vnoise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n = mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                  mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+    return n;
+}
+void main() {
+    writeDepth();
+    vec3 base = texture(u_tex, v_uv).rgb;
+    // 近くは地図より細かい模様（砂・小石）を足す
+    float near = 1.0 - smoothstep(0.05, 3.0, v_dist);
+    float dn = vnoise(v_local * 180.0) * 0.5 + vnoise(v_local * 37.0) * 0.35 + vnoise(v_local * 7.0) * 0.15;
+    base *= mix(1.0, 0.75 + 0.5 * dn, 0.35 + 0.65 * near);
+    vec3 n = normalize(v_n);
+    float ndl = max(dot(n, u_sundir), 0.0);
+    // 太陽が地平線の下なら光は来ない（地形の影は大まかに）
+    float sunUp = smoothstep(-0.01, 0.02, dot(u_sundir, u_zen));
+    float light = ndl * sunUp * u_sunvis;
+    vec3 col;
+    if (u_planet == 1) {
+        float sky = 0.18 * smoothstep(-0.15, 0.1, dot(u_sundir, u_zen));
+        col = base * (light * vec3(1.0, 0.92, 0.82) * 1.1 + sky * vec3(0.9, 0.7, 0.55));
+        float fog = 1.0 - exp(-v_dist / 90.0);
+        col = mix(col, u_haze, fog * 0.75);
+    } else {
+        col = base * (light * 1.25 + u_earthshine * vec3(0.55, 0.65, 0.85));
+    }
+    frag = vec4(col, 1.0);
 }
 """

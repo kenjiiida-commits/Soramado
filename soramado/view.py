@@ -13,7 +13,7 @@ from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject, QOpenGLFr
                               QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture, QOpenGLVertexArrayObject)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
-from . import scope as scopes, astro, shaders, textures
+from . import scope as scopes, terrain, astro, shaders, textures
 from .stars import StarCatalog
 from . import galaxies as gx
 from .galaxy_catalog import GalaxyCatalog
@@ -232,6 +232,7 @@ class SpaceView(QOpenGLWidget):
     statusChanged = Signal(str)
     starSelected = Signal(int)      # 選んだ恒星の番号（-1 = 選択解除）
     conSelected = Signal(int)       # 選んだ星座の番号（-1 = 選択解除）
+    landRequest = Signal(str, float, float)   # 月・火星をダブルクリックした場所（天体, 緯度, 東経）
     scopeStep = Signal(int)         # 望遠鏡モードでホイールを回した（+1 = 倍率を上げる）
 
     def __init__(self, parent=None):
@@ -311,6 +312,10 @@ class SpaceView(QOpenGLWidget):
         self.ground = False
         self.place = tr("大阪")
         self.lat, self.lon = 34.69, 135.50
+        self.ground_body = "earth"     # 地上モードで立っている天体（earth / moon / mars）
+        self.gb_place, self.gb_lat, self.gb_lon = "", 0.0, 0.0   # 地球以外の天体での場所
+        self._terrain = None           # 地形（body, lat, lon, 地平線の形, 標高）
+        self.m_terrain = None
         self.g_az = math.radians(180.0)     # 見ている方位（北=0、東=90度）
         self.g_alt = math.radians(30.0)     # 見ている高度
         self.g_fov = 90.0
@@ -319,6 +324,7 @@ class SpaceView(QOpenGLWidget):
         self._lift = None            # 地上と宇宙のあいだを飛んでいる途中の情報
         self._lift_cam = None        # 飛んでいる途中のカメラ（位置・前・上）
         self._air = 1.0              # 空気の濃さ（1 = 地上、0 = 宇宙）
+        self._air_eff = 1.0          # いま描いている空の、空気の濃さ（月なら 0）
         self._lift_done_at = -1e9    # 最後に着いた時刻
         self.show_lift = True        # 地上と宇宙を行き来するとき、飛ぶ様子を見せる
         # 天体望遠鏡モード
@@ -453,6 +459,51 @@ class SpaceView(QOpenGLWidget):
         self.selected_star = -1
         self.update()
 
+    # ---- 月・火星の地形
+
+    def _draw_terrain(self, f, viewproj, rel):
+        t = self._terrain
+        if not t or t["body"] != self.ground_body:
+            return
+        if not t["mesh_ok"]:
+            if self.m_terrain is None:
+                self.m_terrain = _Mesh(t["tri"], [(0, 3), (1, 3), (2, 2)], GL_TRIANGLES)
+            else:
+                self.m_terrain.update(t["tri"])
+            t["mesh_ok"] = True
+        b = BY_KEY[self.ground_body]
+        rot = body_orientation(b, self.jd)
+        zen = self._gframe[0]
+        sun_dir = rel["sun"] / np.linalg.norm(rel["sun"])
+        p = self.p_terrain
+        p.bind()
+        self._common(p, viewproj)
+        m4 = np.eye(4)
+        m4[:3, :3] = rot
+        p.setUniformValue("u_rot", _qmat(m4))
+        p.setUniformValue1f("u_km", float(1.0 / astro.AU_KM))
+        p.setUniformValue("u_sundir", QVector3D(*sun_dir))
+        p.setUniformValue("u_zen", QVector3D(*zen))
+        p.setUniformValue1f("u_sunvis", float(getattr(self, "_sun_vis", 1.0)))
+        mars = self.ground_body == "mars"
+        p.setUniformValue1i("u_planet", int(mars))
+        day = _smooth(-6.0, 10.0, self._sun_alt)
+        p.setUniformValue("u_haze", QVector3D(*(np.array([0.62, 0.46, 0.32]) * (0.05 + 0.95 * day))))
+        es = 0.0
+        if self.ground_body == "moon":
+            # 地球の明かり（地球が空にあって、昼の側がこちらを向いているほど明るい）
+            de = rel["earth"] / np.linalg.norm(rel["earth"])
+            if float(np.dot(de, zen)) > 0:
+                ds = (self.display_pos("sun") - self.display_pos("earth"))
+                phase = 0.5 * (1.0 + float(np.dot(-de, ds / np.linalg.norm(ds))))
+                es = 0.05 * phase
+        p.setUniformValue1f("u_earthshine", float(es))
+        p.setUniformValue1i("u_tex", 0)
+        self.tex[self.ground_body].bind(0)
+        f.glEnable(GL_DEPTH_TEST)
+        self.m_terrain.draw(f)
+        p.release()
+
     # ---- 天体望遠鏡モード
 
     SCOPE_R = 0.46                  # 丸い視野の半径（画面の短い辺に対する割合）
@@ -549,7 +600,7 @@ class SpaceView(QOpenGLWidget):
         m0 = self.magnify
         self.magnify = mag
         try:
-            return self.display_radius("earth"), self._default_dist("earth")
+            return self.display_radius(self.ground_body), self._default_dist(self.ground_body)
         finally:
             self.magnify = m0
 
@@ -570,12 +621,12 @@ class SpaceView(QOpenGLWidget):
         mag = self.magnify
         self._lift = self._new_lift(False, mag)
         # まず、観測地の真上（宇宙に出たときと同じ場所）まで飛んでくる
-        _off, zen, _n, _e = astro.observer_frame(self.jd, self.lat, self.lon)
+        _off, zen, _n, _e = self._obs_frame()
         r, d = self._lift_geom(mag)
         self._lift["stage"] = "pre"
-        self._start_fly("earth", d, zen)
-        self.target = "earth"
-        self.targetChanged.emit("earth")
+        self._start_fly(self.ground_body, d, zen)
+        self.target = self.ground_body
+        self.targetChanged.emit(self.ground_body)
         self.selected_star = -1
         self.update()
 
@@ -616,7 +667,7 @@ class SpaceView(QOpenGLWidget):
             self.ground = True
             self._lift_cam = None
             self.magnify = 1.0
-            self._air = math.exp(-hk / 12.0)
+            self._air = self._air_at(hk)
             k = _smooth(0.0, 0.3, s)
             self.g_az = L["az"]
             self.g_alt = L["alt0"] + (math.radians(88.0) - L["alt0"]) * k
@@ -628,7 +679,7 @@ class SpaceView(QOpenGLWidget):
             lh = math.log(hk)
             lo, hi = math.log(self.LIFT_SWITCH_KM), math.log(L["hend"])
             self.magnify = math.exp(math.log(max(L["mag"], 1e-9)) * _smooth(lo, hi, lh))
-            off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+            off, zen, north, east = self._obs_frame()
             hdir = north * math.cos(L["az"]) + east * math.sin(L["az"])
             q = _smooth(math.log(300.0), lo + (hi - lo) * 0.85, lh)
             phi = math.radians(88.0) + (math.radians(-90.0) - math.radians(88.0)) * q
@@ -644,12 +695,12 @@ class SpaceView(QOpenGLWidget):
                     ang = math.atan2(float(np.dot(np.cross(up, up_s), fwd)), float(np.dot(up, up_s)))
                     a = ang * r
                     up = up * math.cos(a) + np.cross(fwd, up) * math.sin(a) + fwd * float(np.dot(fwd, up)) * (1 - math.cos(a))
-            radius = self.display_radius("earth") + hk / astro.AU_KM
-            eye = self.display_pos("earth") + zen * radius
+            radius = self.display_radius(self.ground_body) + hk / astro.AU_KM
+            eye = self.display_pos(self.ground_body) + zen * radius
             self._lift_cam = (eye, fwd / np.linalg.norm(fwd), up / np.linalg.norm(up))
-            if self.target != "earth":
-                self.target = "earth"
-                self.targetChanged.emit("earth")
+            if self.target != self.ground_body:
+                self.target = self.ground_body
+                self.targetChanged.emit(self.ground_body)
             self.dist = radius
             self.yaw = math.atan2(zen[1], zen[0])
             self.pitch = math.asin(max(-1.0, min(1.0, float(zen[2]))))
@@ -667,14 +718,14 @@ class SpaceView(QOpenGLWidget):
         self._fly = None
         self._lift_done_at = self.now()      # 着いてから、軌道の線をゆっくり出す
         if L["up"]:
-            _off, zen, _n, _e = astro.observer_frame(self.jd, self.lat, self.lon)
+            _off, zen, _n, _e = self._obs_frame()
             self.ground = False
             self.magnify = L["mag"]
-            self.target = "earth"
-            self.dist = self._default_dist("earth")
+            self.target = self.ground_body
+            self.dist = self._default_dist(self.ground_body)
             self.yaw = math.atan2(zen[1], zen[0])
             self.pitch = math.asin(max(-1.0, min(1.0, float(zen[2]))))
-            self.targetChanged.emit("earth")
+            self.targetChanged.emit(self.ground_body)
         else:
             self.ground = True
             self.magnify = 1.0
@@ -682,7 +733,19 @@ class SpaceView(QOpenGLWidget):
         self.statusChanged.emit("")
         self.update()
 
+    def _air_at(self, hk):
+        """高度 hk [km] での空気の濃さ（地上の地球 = 1）。"""
+        if self.ground_body == "moon":
+            return 0.0
+        if self.ground_body == "mars":
+            return 0.6 * math.exp(-hk / 11.0)     # 火星の空気はうすいが、ちりで空が明るい
+        return math.exp(-hk / 12.0)
+
     def _lift_layer(self, hk):
+        if self.ground_body != "earth":
+            if hk < 100 and self.ground_body == "mars":
+                return tr("火星の大気（ちりで空が色づく）")
+            return tr("宇宙空間")
         if hk < 12:
             return tr("対流圏（雲や雨ができるところ）")
         if hk < 50:
@@ -733,20 +796,78 @@ class SpaceView(QOpenGLWidget):
         painter.drawText(QRect(0, int(h * 0.80) + 60, w, 30), Qt.AlignHCenter | Qt.AlignTop,
                          tr("クリックかキーで、すぐに着きます"))
 
+    def _obs_frame(self, jd=None):
+        """地上の観測者の位置と向き: (天体の中心からのベクトル[AU], 天頂, 北, 東)。"""
+        jd = self.jd if jd is None else jd
+        if self.ground_body == "earth":
+            return astro.observer_frame(jd, self.lat, self.lon)
+        b = BY_KEY[self.ground_body]
+        R = body_orientation(b, jd)
+        la, lo = math.radians(self.gb_lat), math.radians(self.gb_lon)
+        zen = R @ np.array([math.cos(la) * math.cos(lo), math.cos(la) * math.sin(lo), math.sin(la)])
+        pole = R[:, 2]
+        east = np.cross(pole, zen)
+        if np.linalg.norm(east) < 1e-9:
+            east = np.cross(R[:, 0], zen)
+        east /= np.linalg.norm(east)
+        north = np.cross(zen, east)
+        t = self._terrain
+        h0 = t["h0"] if t and t["body"] == self.ground_body else 0.0
+        off = zen * ((b.radius_km + h0 + terrain.EYE_KM) / astro.AU_KM)
+        return off, zen, north, east
+
+    def set_ground_body(self, body, name="", lat=0.0, lon=0.0):
+        """地上モードで立つ天体と場所を変える（body="earth" なら地球に戻る）。"""
+        self._finish_lift()
+        self.ground_body = body
+        if body != "earth":
+            self.gb_place, self.gb_lat, self.gb_lon = name, lat, lon
+            self._build_terrain()
+        else:
+            self._terrain = None
+        self.clear_trails()
+        self.update()
+
+    def ground_place_name(self):
+        if self.ground_body == "earth":
+            return self.place
+        sep = ", " if EN_MODE else "・"
+        return f"{terrain.body_name(self.ground_body)}{sep}{tr(self.gb_place)}" if self.gb_place else \
+            terrain.body_name(self.ground_body)
+
+    def _build_terrain(self):
+        b = BY_KEY[self.ground_body]
+        tri, horizon, h0 = terrain.build(self.ground_body, self.gb_lat, self.gb_lon, b.radius_km)
+        self._terrain = {"body": self.ground_body, "lat": self.gb_lat, "lon": self.gb_lon, "horizon": horizon,
+                         "h0": h0, "tri": tri, "real": terrain.available(self.ground_body), "mesh_ok": False}
+
+    def reload_terrain(self):
+        terrain.forget("moon")
+        terrain.forget("mars")
+        if self.ground_body != "earth":
+            self._build_terrain()
+        self.update()
+
+    def terrain_horizon(self, az_deg):
+        t = self._terrain
+        if not t or t["body"] != self.ground_body:
+            return None
+        return float(t["horizon"][int(round((az_deg % 360.0) * 2)) % 720])
+
     def set_place(self, name, lat, lon):
         self.place, self.lat, self.lon = name, lat, lon
         self.update()
 
     def ground_altaz(self, key):
         """地上モードで、天体の高度・方位 [度]。"""
-        off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
-        eye = self.positions["earth"] + off
+        off, zen, north, east = self._obs_frame()
+        eye = self.positions[self.ground_body] + off
         return astro.alt_az(self.display_pos(key) - eye, zen, north, east)
 
     def look_at(self, key):
         """地上モードで、その天体の方を向く。地平線の下なら False。"""
         self._finish_lift()
-        if (key not in BY_KEY and not self.is_minor(key)) or key == "earth":
+        if (key not in BY_KEY and not self.is_minor(key)) or key == self.ground_body:
             return False
         alt, az = self.ground_altaz(key)
         self.g_az = math.radians(az)
@@ -766,7 +887,7 @@ class SpaceView(QOpenGLWidget):
     def look_dir(self, direction, fov=None):
         """地上モードで、その方向（黄道座標の向き）を向く。"""
         self._finish_lift()
-        off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+        off, zen, north, east = self._obs_frame()
         alt, az = astro.alt_az(np.asarray(direction), zen, north, east)
         self.g_az = math.radians(az)
         self.g_alt = math.radians(max(alt, 5.0))
@@ -1099,6 +1220,7 @@ class SpaceView(QOpenGLWidget):
             return p
 
         self.p_sphere = prog(shaders.SPHERE_VS, shaders.SPHERE_FS)
+        self.p_terrain = prog(shaders.TERRAIN_VS, shaders.TERRAIN_FS)
         self.p_ring = prog(shaders.RING_VS, shaders.RING_FS)
         self.p_line = prog(shaders.LINE_VS, shaders.LINE_FS)
         self.p_glow = prog(shaders.GLOW_VS, shaders.GLOW_FS)
@@ -1501,9 +1623,13 @@ class SpaceView(QOpenGLWidget):
     def _lp_on(self) -> bool:
         return self.ground and not self.airless
 
+    def _bort(self) -> int:
+        """光害の強さ（地球以外の天体には街明かりがない）。"""
+        return self.bortle if self.ground_body == "earth" else 1
+
     def _lp_dim(self) -> float:
         """光害で、天の川・星雲・銀河がどれくらい見えるか（0〜1）。"""
-        return MW_VIS[self.bortle] if self._lp_on() else 1.0
+        return MW_VIS[self._bort()] if self._lp_on() else 1.0
 
     def _draw_mwsky(self, f, viewproj, w):
         if w <= 0.005:
@@ -1959,7 +2085,7 @@ class SpaceView(QOpenGLWidget):
 
     def _ground_dir(self, az, alt):
         zen, north, east = self._gframe if hasattr(self, "_gframe") else \
-            astro.observer_frame(self.jd, self.lat, self.lon)[1:]
+            self._obs_frame()[1:]
         return (math.cos(alt) * (math.cos(az) * north + math.sin(az) * east) + math.sin(alt) * zen)
 
     def _draw_sky(self, f, mode, w, h):
@@ -1978,9 +2104,10 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue("u_sun", QVector3D(*(sun / np.linalg.norm(sun))))
         p.setUniformValue1f("u_sunalt", float(self._sun_alt))
         p.setUniformValue1f("u_sunlight", float(self._sunlight_sky))
-        p.setUniformValue1f("u_lp", float(SKY_GLOW[self.bortle]))
+        p.setUniformValue1f("u_lp", float(SKY_GLOW[self._bort()]))
         p.setUniformValue1i("u_mode", mode)
-        p.setUniformValue1f("u_air", float(self._air))
+        p.setUniformValue1f("u_air", float(self._air_eff))
+        p.setUniformValue1i("u_planet", int(self.ground_body == "mars"))
         self.m_glow.draw(f)
         p.release()
 
@@ -2006,14 +2133,14 @@ class SpaceView(QOpenGLWidget):
 
         if self.ground:
             # 地上モード：観測地に立って、方位・高度の方向を見る
-            off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+            off, zen, north, east = self._obs_frame()
             self._gframe = (zen, north, east)
             self._gframe_now = (off, zen, north, east)
             if self.scope is not None:
                 self._apply_scope(w, h)
             self._fov = self.g_fov
             self._record_trails()
-            eye = self.positions["earth"] + off
+            eye = self.positions[self.ground_body] + off
             fwd = self._ground_dir(self.g_az, self.g_alt)
             up0 = zen
         else:
@@ -2037,7 +2164,8 @@ class SpaceView(QOpenGLWidget):
         up = np.cross(right, fwd)
         view = np.eye(4)
         view[0, :3], view[1, :3], view[2, :3] = right, up, -fwd
-        proj = _perspective(self._fov, w / h, NEAR_AU, FAR_AU)
+        near = 1e-13 if (self.ground and self.ground_body != "earth") else NEAR_AU   # 足もとの地面（数cm）まで描く
+        proj = _perspective(self._fov, w / h, near, FAR_AU)
         if self.ground and self.scope is not None:
             fx, fy = self._scope_flip()            # 望遠鏡の像の向き（倒立・左右反転）
             proj = np.diag([fx, fy, 1.0, 1.0]) @ proj
@@ -2062,9 +2190,13 @@ class SpaceView(QOpenGLWidget):
         self._sunlight_sky = 1.0
         if self.ground:
             # 日食のときは、太陽がかくれた割合に応じて空を暗くする（9割以上欠けると目に見えて暗くなる）
-            if self.magnify <= 1.0001:
+            self._air_eff = self._air if self._lift else self._air_at(0.0)
+            occ = {"earth": "moon", "moon": "earth"}.get(self.ground_body)
+            self._sun_vis = 1.0
+            if self.magnify <= 1.0001 and occ:
                 light = eclipses.sun_light_fraction(eye, self.display_pos("sun"), self.display_radius("sun"),
-                                                    self.display_pos("moon"), self.display_radius("moon"))
+                                                    self.display_pos(occ), self.display_radius(occ))
+                self._sun_vis = light
                 self._sunlight_sky = _smooth(0.0, 0.08, light)
             zen = self._gframe[0]
             sun_dir = sun_rel / np.linalg.norm(sun_rel)
@@ -2072,16 +2204,16 @@ class SpaceView(QOpenGLWidget):
             if not self.airless:
                 self._draw_sky(f, 0, w, h)
                 # 空が明るいほど星は見えない（高く昇って空気がうすいほど、よく見える）
-                night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky * min(1.0, 3.0 * self._air)
+                night = 1.0 - _smooth(-15.0, -1.0, self._sun_alt) * self._sunlight_sky * min(1.0, 3.0 * self._air_eff)
                 limit = self.limit_mag - (1.0 - night) * 7.0
                 # 光害: 暗い空（限界等級6.5）を基準に、見える星の限界を変える
-                limit = min(limit, self.limit_mag - (6.5 - NELM[self.bortle]) * self._air)
+                limit = min(limit, self.limit_mag - (6.5 - NELM[self._bort()]) * self._air_eff)
         if self.ground and self.scope is not None:
             # 望遠鏡: 口径が大きいほど暗い星まで見える。倍率を上げると空の背景が暗くなるので、明るい空の影響は少し小さく
             sv = self.scope_view()
             limit = sv.limit
             if not self.airless:
-                limit -= (1.0 - night) * 6.0 + (6.5 - NELM[self.bortle]) * self._air * 0.7
+                limit -= (1.0 - night) * 6.0 + (6.5 - NELM[self._bort()]) * self._air_eff * 0.7
         self._night = night
 
         # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
@@ -2178,8 +2310,8 @@ class SpaceView(QOpenGLWidget):
         sat_r = self.display_radius("saturn")
         sat_rot = body_orientation(sat, self.jd)
         for b in BODIES:
-            if self.ground and b.key == "earth":
-                continue          # 地上モードでは自分の立っている地球は描かない
+            if self.ground and b.key == self.ground_body:
+                continue          # 地上モードでは自分の立っている天体は描かない
             if self._is_small(b.key) and (self.ground or not self.show_small):
                 continue
             if self.sat_hidden(b.key):
@@ -2223,6 +2355,10 @@ class SpaceView(QOpenGLWidget):
                 self.tex["earth:clouds"].bind(2)
             self.m_sphere.draw(f)
         p.release()
+
+        # ---- 月・火星の地形
+        if self.ground and self.ground_body != "earth" and not self.airless:
+            self._draw_terrain(f, viewproj, rel)
 
         f.glEnable(GL_BLEND)
         f.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -2339,7 +2475,7 @@ class SpaceView(QOpenGLWidget):
         f.glDisable(GL_BLEND)
         f.glDisable(GL_DEPTH_TEST)
 
-        if self.ground and not self.airless:
+        if self.ground and not self.airless and self.ground_body == "earth":
             self._draw_sky(f, 1, w, h)
             self._draw_landscape(f, w, h)
         self._draw_overlay(rel, viewproj, w, h)
@@ -2349,7 +2485,8 @@ class SpaceView(QOpenGLWidget):
     # ---------------------------------------------------------- 大気（地上モード）
 
     def _atm_on(self) -> bool:
-        return self.ground and self.show_atmosphere and not self.airless and self._air > 0.5
+        return (self.ground and self.show_atmosphere and not self.airless and self._air > 0.5
+                and self.ground_body == "earth")
 
     def _atm_refract(self, rel):
         """大気差: 地平線近くの天体を少し浮き上がらせる（シェーダーの atmRefract と同じ計算）。"""
@@ -2619,7 +2756,7 @@ class SpaceView(QOpenGLWidget):
         for b in order:
             if far and b.key != "sun":
                 continue          # 太陽系から遠く離れると惑星は太陽に重なるので出さない
-            if self.ground and (b.key == "earth" or not self._above(rel[b.key], margin=0.01)):
+            if self.ground and (b.key == self.ground_body or not self._above(rel[b.key], margin=0.01)):
                 continue          # 地平線の下の天体は見えない
             if self._is_small(b.key) and (self.ground or not self.show_small):
                 continue          # 小天体は暗いので、地上からは出さない
@@ -2663,7 +2800,7 @@ class SpaceView(QOpenGLWidget):
 
         # 大きな天体の円の中には、ほかの名前（星・彗星など）を置かない
         for _k, dx, dy, dr, _dd in discs:
-            if dr > 20 and not (self.ground and _k == "earth"):
+            if dr > 20 and not (self.ground and _k == self.ground_body):
                 a = dr * 0.7
                 placed.append(QRect(int(dx - a), int(dy - a), int(2 * a), int(2 * a)))
         if self.ground:
@@ -2772,6 +2909,12 @@ class SpaceView(QOpenGLWidget):
         d = np.asarray(direction, dtype=np.float64)
         d = d / max(float(np.linalg.norm(d)), 1e-30)
         sn = float(np.dot(d, self._gframe[0]))
+        if self.ground_body != "earth":
+            zen, north, east = self._gframe
+            az = math.degrees(math.atan2(float(np.dot(d, east)), float(np.dot(d, north))))
+            alt = math.degrees(math.asin(max(-1.0, min(1.0, sn))))
+            hz = self.terrain_horizon(az)
+            return alt > (hz if hz is not None else -math.degrees(margin)) - math.degrees(margin)
         if self.landscape is None:
             return sn > -margin
         zen, north, east = self._gframe
@@ -2798,8 +2941,9 @@ class SpaceView(QOpenGLWidget):
             last = None
         if last is not None and abs(self.jd - last) < 0.5:
             return
-        earth = self.positions["earth"]
-        for k in self.TRAIL_KEYS:
+        earth = self.positions[self.ground_body]
+        keys = [k for k in self.TRAIL_KEYS if k != self.ground_body] + (["earth"] if self.ground_body != "earth" else [])
+        for k in keys:
             d = self.display_pos(k) - earth
             pts = self._trails.setdefault(k, [])
             pts.append(d / np.linalg.norm(d))
@@ -2952,7 +3096,7 @@ class SpaceView(QOpenGLWidget):
             dirs = [tr("北"), tr("北北東"), tr("北東"), tr("東北東"), tr("東"), tr("東南東"), tr("南東"), tr("南南東"),
                     tr("南"), tr("南南西"), tr("南西"), tr("西南西"), tr("西"), tr("西北西"), tr("北西"), tr("北北西")]
             fov = f"{self.g_fov:.0f}" if self.g_fov >= 10 else f"{self.g_fov:.2g}"
-            txt = trx(f"{self.place}　見ている方向: {dirs[int((az + 11.25) // 22.5) % 16]}"
+            txt = trx(f"{self.ground_place_name()}　見ている方向: {dirs[int((az + 11.25) // 22.5) % 16]}"
                       f"（方位 {az:.0f}°・高度 {alt:.0f}°）　視野 {fov}°")
             painter.setPen(QPen(QColor(200, 205, 215)))
             painter.drawText(QPointF(12, h - 12), txt)
@@ -2963,13 +3107,13 @@ class SpaceView(QOpenGLWidget):
 
     def _draw_artsats(self, painter, viewproj, w, h, placed, fm):
         """人工衛星（宇宙から見るときは地球のまわりに、地上から見るときは空に）。"""
-        if not self.artsats or not self.show_artsat:
+        if not self.artsats or not self.show_artsat or (self.ground and self.ground_body != "earth"):
             return
         earth = self.positions["earth"]
         eye = self._eye
         if self.ground:
             dark = self._night > 0.5
-            off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
+            off, zen, north, east = self._obs_frame()
             for i, s in enumerate(self.artsats):
                 if not artsat.usable(s, self.jd):
                     continue
@@ -3060,7 +3204,7 @@ class SpaceView(QOpenGLWidget):
     def _draw_meteors(self, painter, viewproj, w, h, placed, fm):
         """地上モードで、活動中の流星群の放射点と、流れる流星。"""
         self._meteor_live = False
-        if not self.ground or not self.show_meteors:
+        if not self.ground or not self.show_meteors or self.ground_body != "earth":
             self._meteors = []
             return
         zen = self._gframe[0]
@@ -3278,8 +3422,36 @@ class SpaceView(QOpenGLWidget):
         self.dist = min(MAX_DIST_AU, max(self._min_dist(self.target), self.dist * (0.85 ** steps)))
         self.update()
 
+    def _surface_at(self, key, x, y):
+        """画面の点 (x, y) から天体の表面をさした場所の（緯度, 東経）[度]。当たらなければ None。"""
+        if not hasattr(self, "_basis") or self.ground:
+            return None
+        right, up, fwd = self._basis
+        w, h = max(self.width(), 1), max(self.height(), 1)
+        t = math.tan(math.radians(self._fov) / 2)
+        nx, ny = (x / w) * 2 - 1, 1 - (y / h) * 2
+        ray = fwd + nx * t * (w / h) * right + ny * t * up
+        ray /= np.linalg.norm(ray)
+        c = self.display_pos(key) - self._eye
+        r = self.display_radius(key)
+        b = float(np.dot(ray, c))
+        disc = b * b - (float(np.dot(c, c)) - r * r)
+        if disc < 0 or b <= 0:
+            return None
+        p = ray * (b - math.sqrt(disc)) - c
+        q = body_orientation(BY_KEY[key], self.jd).T @ (p / np.linalg.norm(p))
+        return math.degrees(math.asin(max(-1.0, min(1.0, float(q[2]))))), math.degrees(math.atan2(q[1], q[0]))
+
     def mouseDoubleClickEvent(self, e):
         x, y = e.position().x(), e.position().y()
+        # すでに選んでいる月・火星を大きく見ているときは、その場所に降り立つ
+        if not self.ground and self.target in ("moon", "mars") and self.target in self._screen:
+            sx, sy, sr = self._screen[self.target]
+            if sr > 40 and math.hypot(sx - x, sy - y) < sr:
+                hit = self._surface_at(self.target, x, y)
+                if hit:
+                    self.landRequest.emit(self.target, hit[0], hit[1])
+                    return
         best, best_d = None, 1e9
         for key, (sx, sy, r) in self._screen.items():
             dd = math.hypot(sx - x, sy - y)
