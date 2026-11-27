@@ -232,8 +232,9 @@ class MainWindow(QMainWindow):
         for key, label in (("earth", "🌏 地球"), ("moon", "🌕 月"), ("mars", "🔴 火星")):
             self.cb_body.addItem(tr(label), key)
         self.cb_body.setToolTip(tr("地上モードで立つ天体（月や火星にも降り立てます）"))
-        self.cb_body.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.cb_body.setMinimumContentsLength(4)
+        fm = self.cb_body.fontMetrics()
+        widest = max(fm.horizontalAdvance(self.cb_body.itemText(i)) for i in range(self.cb_body.count()))
+        self.cb_body.setMinimumWidth(widest + fm.horizontalAdvance("M") * 2 + 40)   # 絵文字の幅は少なめに測られるので余白を足す
         self.cb_body.activated.connect(lambda i: self._set_body(self.cb_body.itemData(i)))
         tb.addWidget(self.cb_body)
         self.cb_place = QComboBox()
