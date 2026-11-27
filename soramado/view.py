@@ -6,14 +6,14 @@ import math
 import time
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import (QBrush, QPainterPath, QColor, QFont, QImage, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF,
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (QBrush, QPainterPath, QColor, QFont, QImage, QLinearGradient, QMatrix3x3, QMatrix4x4, QPainter, QPen, QPolygonF, QRadialGradient,
                            QVector2D, QVector3D, QVector4D)
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject, QOpenGLFramebufferObjectFormat,
                               QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture, QOpenGLVertexArrayObject)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
-from . import astro, shaders, textures
+from . import scope as scopes, astro, shaders, textures
 from .stars import StarCatalog
 from . import galaxies as gx
 from .galaxy_catalog import GalaxyCatalog
@@ -55,6 +55,7 @@ GL_TEXTURE0 = 0x84C0
 GL_TEXTURE_2D = 0x0DE1
 GLOW_EXPOSURE = 1.3          # 星雲・銀河の明るさ（圧縮する前にかける倍率）
 PHOTO_GAIN = 0.85            # 写真の明るさ
+SCOPE_PHOTO = 0.25           # 望遠鏡で見る星雲・銀河の写真の明るさ（地上の夜空に合わせて控えめに）
 _c, _s = math.cos(astro.OBLIQUITY_J2000), math.sin(astro.OBLIQUITY_J2000)
 ECL2EQ = np.array([[1.0, 0.0, 0.0], [0.0, _c, -_s], [0.0, _s, _c]])   # 黄道座標 → 赤道座標
 # 光害（ボートル・スケール 1〜9）: 目で見える限界等級・天の川の見え方・空の明るさ
@@ -231,6 +232,7 @@ class SpaceView(QOpenGLWidget):
     statusChanged = Signal(str)
     starSelected = Signal(int)      # 選んだ恒星の番号（-1 = 選択解除）
     conSelected = Signal(int)       # 選んだ星座の番号（-1 = 選択解除）
+    scopeStep = Signal(int)         # 望遠鏡モードでホイールを回した（+1 = 倍率を上げる）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -319,6 +321,12 @@ class SpaceView(QOpenGLWidget):
         self._air = 1.0              # 空気の濃さ（1 = 地上、0 = 宇宙）
         self._lift_done_at = -1e9    # 最後に着いた時刻
         self.show_lift = True        # 地上と宇宙を行き来するとき、飛ぶ様子を見せる
+        # 天体望遠鏡モード
+        self.scope = None            # scope.Telescope（None = 使っていない）
+        self.scope_eye = None        # scope.Eyepiece
+        self.scope_image = "erect"   # 像の向き
+        self.scope_track = False     # 自動追尾（星が視野から逃げない）
+        self._track = None           # 追尾している方向と、そのときの方位・高度
         # 空の線
         self.show_ecliptic = False   # 黄道（太陽の通り道）
         self.show_equator = False    # 天の赤道
@@ -444,6 +452,92 @@ class SpaceView(QOpenGLWidget):
                 self.target, self.dist, self.yaw, self.pitch, self.magnify = self._saved_space
         self.selected_star = -1
         self.update()
+
+    # ---- 天体望遠鏡モード
+
+    SCOPE_R = 0.46                  # 丸い視野の半径（画面の短い辺に対する割合）
+
+    def set_scope(self, telescope, eyepiece=None, image=None, track=None):
+        """望遠鏡をのぞく（telescope=None でやめる）。"""
+        self.scope = telescope
+        if eyepiece is not None:
+            self.scope_eye = eyepiece
+        if image is not None:
+            self.scope_image = image
+        if track is not None:
+            self.scope_track = track
+        if telescope is None:
+            self.g_fov = 60.0
+            self._track = None
+        self.selected_star = -1
+        self.update()
+
+    def scope_view(self):
+        if self.scope is None:
+            return None
+        return scopes.compute(self.scope, self.scope_eye)
+
+    def _scope_flip(self):
+        """像の向き → 画面の x・y の向き（-1 = 逆）。"""
+        if self.scope is None or self.scope_image == "erect":
+            return 1.0, 1.0
+        if self.scope_image == "inverted":
+            return -1.0, -1.0
+        return -1.0, 1.0
+
+    def _apply_scope(self, w, h):
+        """視野の広さを望遠鏡に合わせ、追尾するなら同じ星空の方向を向き続ける。"""
+        v = self.scope_view()
+        r = self.SCOPE_R * min(w, h)
+        self.g_fov = v.field * h / (2.0 * r)
+        if not self.scope_track:
+            self._track = None
+            return
+        off, zen, north, east = self._gframe_now
+        t = self._track
+        if t is None or abs(t[1] - self.g_az) > 1e-9 or abs(t[2] - self.g_alt) > 1e-9:
+            d = self._ground_dir(self.g_az, self.g_alt)       # 向きを変えたので、新しい方向を追う
+        else:
+            d = t[0]
+            alt, az = astro.alt_az(d, zen, north, east)
+            self.g_az, self.g_alt = math.radians(az), math.radians(alt)
+        self._track = (d, self.g_az, self.g_alt)
+
+    def _draw_scope_mask(self, painter, w, h):
+        """丸い視野の外を黒くし、望遠鏡と倍率を書く。"""
+        if self.scope is None:
+            return
+        cx, cy = w / 2.0, h / 2.0
+        r = self.SCOPE_R * min(w, h)
+        path = QPainterPath()
+        path.addRect(QRectF(0, 0, w, h))
+        hole = QPainterPath()
+        hole.addEllipse(QPointF(cx, cy), r, r)
+        painter.setPen(Qt.NoPen)
+        painter.fillPath(path.subtracted(hole), QColor(0, 0, 0))
+        g = QRadialGradient(QPointF(cx, cy), r)
+        g.setColorAt(0.0, QColor(0, 0, 0, 0))
+        g.setColorAt(0.93, QColor(0, 0, 0, 0))
+        g.setColorAt(1.0, QColor(0, 0, 0, 255))
+        painter.setBrush(QBrush(g))
+        painter.drawEllipse(QPointF(cx, cy), r + 0.5, r + 0.5)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(60, 70, 85), 1.2))
+        painter.drawEllipse(QPointF(cx, cy), r + 1.5, r + 1.5)
+        f = QFont(painter.font())
+        f.setPointSizeF(9.5)
+        painter.setFont(f)
+        name = tr(self.scope.name)
+        if not self.scope.bino_mag:
+            name += " + " + scopes.eyepiece_name(self.scope_eye)
+        lines = [name, scopes.describe(self.scope, self.scope_eye)]
+        if self.scope_track:
+            lines.append(tr("自動追尾中"))
+        painter.setPen(QColor(170, 185, 205))
+        y = 22
+        for t in lines:
+            painter.drawText(QPointF(12, y), t)
+            y += 18
 
     # ---- 飛び立つ・着陸する
 
@@ -1317,14 +1411,15 @@ class SpaceView(QOpenGLWidget):
     def _update_photo_weights(self, eye, focal):
         """カメラが地球の側から見ているほど写真を濃く、横や裏から見るときは模式図にする。"""
         self._photo_w = {}
-        if not self.show_photos or self.ground or not self._ph:
+        scope = self.ground and self.scope is not None      # 望遠鏡では、地上からでも星雲・銀河の写真を見せる
+        if not self.show_photos or (self.ground and not scope) or not self._ph:
             return
         neb_k = 1.0 - _smooth(2e4 * LY_AU, 8e4 * LY_AU, self._sun_far)
         for key, e in self._ph.items():
             isneb = key.startswith("n:")
             if (isneb and (not self.show_nebulae or neb_k <= 0.01)) or (not isneb and not self.show_galaxies):
                 continue
-            if not isneb and self._sun_far < 0.5 * LY_AU:
+            if not isneb and self._sun_far < 0.5 * LY_AU and not scope:
                 continue
             g = self._photo_geom(e)
             if g is None:
@@ -1339,6 +1434,9 @@ class SpaceView(QOpenGLWidget):
             w *= _smooth(0.12 * half, 0.45 * half, d)          # 近づきすぎたら模式図に
             if isneb:
                 w *= neb_k
+            if scope:
+                # 空が明るいと見えにくい。目で見ると写真ほど色はつかないので、少し控えめに
+                w *= SCOPE_PHOTO * getattr(self, "_night", 1.0) * (1.0 if self.airless else self._lp_dim())
             if w > 0.01 and half / d * focal > 1.5:
                 self._photo_w[key] = w
 
@@ -1396,6 +1494,8 @@ class SpaceView(QOpenGLWidget):
         w = 1.0 - _smooth(200 * LY_AU, 4000 * LY_AU, sun_far)
         if self.ground:
             w *= self._night * self._lp_dim()
+            if self.scope is not None:
+                w *= _smooth(1.5, 6.0, self.scope_view().field)   # 望遠鏡の狭い視野では、天の川は広がった光に見えない
         return w
 
     def _lp_on(self) -> bool:
@@ -1906,9 +2006,12 @@ class SpaceView(QOpenGLWidget):
 
         if self.ground:
             # 地上モード：観測地に立って、方位・高度の方向を見る
-            self._fov = self.g_fov
             off, zen, north, east = astro.observer_frame(self.jd, self.lat, self.lon)
             self._gframe = (zen, north, east)
+            self._gframe_now = (off, zen, north, east)
+            if self.scope is not None:
+                self._apply_scope(w, h)
+            self._fov = self.g_fov
             self._record_trails()
             eye = self.positions["earth"] + off
             fwd = self._ground_dir(self.g_az, self.g_alt)
@@ -1935,6 +2038,9 @@ class SpaceView(QOpenGLWidget):
         view = np.eye(4)
         view[0, :3], view[1, :3], view[2, :3] = right, up, -fwd
         proj = _perspective(self._fov, w / h, NEAR_AU, FAR_AU)
+        if self.ground and self.scope is not None:
+            fx, fy = self._scope_flip()            # 望遠鏡の像の向き（倒立・左右反転）
+            proj = np.diag([fx, fy, 1.0, 1.0]) @ proj
         viewproj = proj @ view
         self._set_atm_uniforms()
         self._viewproj = viewproj
@@ -1970,6 +2076,12 @@ class SpaceView(QOpenGLWidget):
                 limit = self.limit_mag - (1.0 - night) * 7.0
                 # 光害: 暗い空（限界等級6.5）を基準に、見える星の限界を変える
                 limit = min(limit, self.limit_mag - (6.5 - NELM[self.bortle]) * self._air)
+        if self.ground and self.scope is not None:
+            # 望遠鏡: 口径が大きいほど暗い星まで見える。倍率を上げると空の背景が暗くなるので、明るい空の影響は少し小さく
+            sv = self.scope_view()
+            limit = sv.limit
+            if not self.airless:
+                limit -= (1.0 - night) * 6.0 + (6.5 - NELM[self.bortle]) * self._air * 0.7
         self._night = night
 
         # ---- 星空（いちばん奥なので最初に、奥行きなしで描く）
@@ -2581,6 +2693,7 @@ class SpaceView(QOpenGLWidget):
         self._draw_meteors(painter, viewproj, w, h, placed, fm)
         self._draw_artsats(painter, viewproj, w, h, placed, fm)
         self._draw_scale(painter, w, h)
+        self._draw_scope_mask(painter, w, h)
         self._draw_lift_hud(painter, w, h)
         painter.end()
 
@@ -3125,10 +3238,13 @@ class SpaceView(QOpenGLWidget):
         d = e.position() - p0
         if self.ground:
             if button == Qt.LeftButton:
-                # 画面をつかんで動かす感覚（視野が狭いほどゆっくり）
+                # 画面をつかんで動かす感覚（視野が狭いほどゆっくり。望遠鏡の像が逆さなら、動かす向きも逆）
                 k = math.radians(self.g_fov) / max(self.height(), 1)
-                self.g_az = az0 - d.x() * k
-                self.g_alt = max(math.radians(-20), min(math.radians(90), alt0 + d.y() * k))
+                fx, fy = self._scope_flip()
+                self.g_az = az0 - d.x() * k * fx
+                self.g_alt = max(math.radians(-20), min(math.radians(90), alt0 + d.y() * k * fy))
+            elif self.scope is not None:
+                pass                  # 望遠鏡では、倍率は接眼レンズで決まる
             else:
                 self.g_fov = max(0.1, min(120.0, fov0 * math.exp(d.y() * 0.01)))
             self.update()
@@ -3149,6 +3265,10 @@ class SpaceView(QOpenGLWidget):
             self._finish_lift()
             return
         steps = e.angleDelta().y() / 120.0
+        if self.ground and self.scope is not None:
+            if steps:
+                self.scopeStep.emit(1 if steps > 0 else -1)
+            return
         if self.ground:
             self.g_fov = max(0.1, min(120.0, self.g_fov * (0.88 ** steps)))
             self.update()
@@ -3205,6 +3325,8 @@ class SpaceView(QOpenGLWidget):
         if k == Qt.Key_Space:
             self.paused = not self.paused
             self.statusChanged.emit("")
+        elif self.ground and self.scope is not None and k in (Qt.Key_Plus, Qt.Key_Equal, Qt.Key_Minus):
+            self.scopeStep.emit(-1 if k == Qt.Key_Minus else 1)
         elif self.ground and k in (Qt.Key_Plus, Qt.Key_Equal, Qt.Key_Minus):
             self.g_fov = max(0.1, min(120.0, self.g_fov * (0.8 if k != Qt.Key_Minus else 1.25)))
         elif k in (Qt.Key_Plus, Qt.Key_Equal):

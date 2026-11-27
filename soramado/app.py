@@ -38,6 +38,7 @@ from . import tonight
 from . import landscape
 from .constellation_info import INFO as CON_INFO
 from . import satellites as sats
+from . import scope as scopes
 from .descriptions import KIND_DESCRIPTIONS, STAR_TEXT, text_for
 
 SPEEDS = [
@@ -220,6 +221,11 @@ class MainWindow(QMainWindow):
         self.btn_ecl.setCheckable(True)
         self.btn_ecl.setToolTip(tr("黄道（太陽の通り道）を表示します。惑星はこの線の近くを動きます"))
         tb.addWidget(self.btn_ecl)
+        self.btn_scope = QPushButton(tr("◎ 望遠鏡"))
+        self.btn_scope.setCheckable(True)
+        self.btn_scope.setToolTip(tr("地上から、天体望遠鏡や双眼鏡でのぞいたように見ます"))
+        tb.addWidget(self.btn_scope)
+        self._build_scope_bar()
         self.cb_place = QComboBox()
         for name, lat, lon in PLACES:
             self.cb_place.addItem(name, (name, lat, lon))
@@ -2030,6 +2036,85 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------- 地上モード
 
+    # ---- 天体望遠鏡モード
+
+    def _build_scope_bar(self):
+        bar = QToolBar(tr("望遠鏡"))
+        bar.setObjectName("scopebar")
+        self.addToolBarBreak()
+        self.addToolBar(bar)
+        self.scope_bar = bar
+        bar.addWidget(QLabel(tr(" 望遠鏡 ")))
+        self.cb_scope = QComboBox()
+        for t in scopes.TELESCOPES:
+            self.cb_scope.addItem(tr(t.name), t.key)
+        bar.addWidget(self.cb_scope)
+        bar.addWidget(QLabel(tr("  接眼レンズ ")))
+        self.cb_eye = QComboBox()
+        for e in scopes.EYEPIECES:
+            self.cb_eye.addItem(scopes.eyepiece_name(e))
+        self.cb_eye.setToolTip(tr("焦点距離の短い接眼レンズほど、倍率が上がります（マウスのホイールや＋−キーでも変えられます）"))
+        bar.addWidget(self.cb_eye)
+        bar.addWidget(QLabel(tr("  像の向き ")))
+        self.cb_image = QComboBox()
+        for key, name in scopes.IMAGE_ORIENTATIONS:
+            self.cb_image.addItem(tr(name), key)
+        bar.addWidget(self.cb_image)
+        self.chk_track = QCheckBox(tr("自動追尾"))
+        self.chk_track.setToolTip(tr("地球が回っても、天体が視野から逃げないように望遠鏡を動かします"))
+        bar.addWidget(self.chk_track)
+        st = self.settings
+        i = self.cb_scope.findData(st.value("scope/telescope", "ref80"))
+        self.cb_scope.setCurrentIndex(max(0, i))
+        self.cb_eye.setCurrentIndex(min(len(scopes.EYEPIECES) - 1, max(0, int(st.value("scope/eyepiece", 2)))))
+        self.chk_track.setChecked(st.value("scope/track", "false") in (True, "true"))
+        self._sync_image_default()
+        bar.setVisible(False)
+        self.btn_scope.toggled.connect(self._on_scope)
+        self.cb_scope.currentIndexChanged.connect(lambda _i: (self._sync_image_default(), self._apply_scope_ui()))
+        self.cb_eye.currentIndexChanged.connect(lambda _i: self._apply_scope_ui())
+        self.cb_image.currentIndexChanged.connect(lambda _i: self._apply_scope_ui())
+        self.chk_track.toggled.connect(lambda _b: self._apply_scope_ui())
+        self.view.scopeStep.connect(self._scope_step)
+
+    def _sync_image_default(self):
+        t = scopes.BY_KEY[self.cb_scope.currentData()]
+        self.cb_image.blockSignals(True)
+        self.cb_image.setCurrentIndex(max(0, self.cb_image.findData(t.image)))
+        self.cb_image.blockSignals(False)
+        self.cb_eye.setEnabled(not t.bino_mag)
+
+    def _apply_scope_ui(self):
+        st = self.settings
+        st.setValue("scope/telescope", self.cb_scope.currentData())
+        st.setValue("scope/eyepiece", self.cb_eye.currentIndex())
+        st.setValue("scope/track", self.chk_track.isChecked())
+        if not self.btn_scope.isChecked():
+            return
+        t = scopes.BY_KEY[self.cb_scope.currentData()]
+        self.view.set_scope(t, scopes.EYEPIECES[self.cb_eye.currentIndex()], self.cb_image.currentData(),
+                            self.chk_track.isChecked())
+
+    def _on_scope(self, on):
+        self.scope_bar.setVisible(on)
+        if on:
+            if not self.btn_ground.isChecked():
+                self._set_ground_checked(True)
+            # 速く時間が進むと、天体がすぐ視野から出てしまうので実時間にする（コマ送りはそのまま）
+            sp = SPEEDS[self.cb_speed.currentIndex()][1]
+            if not isinstance(sp, str) and sp > 60.0:
+                self.cb_speed.setCurrentIndex(0)
+            self._apply_scope_ui()
+            self.statusBar().showMessage(tr("望遠鏡でのぞいています。ドラッグで向きを変え、ホイールで接眼レンズ（倍率）を変えます"), 8000)
+        else:
+            self.view.set_scope(None)
+        self.view.setFocus()
+
+    def _scope_step(self, d):
+        if self.cb_eye.isEnabled():
+            i = max(0, min(self.cb_eye.count() - 1, self.cb_eye.currentIndex() + d))
+            self.cb_eye.setCurrentIndex(i)
+
     def _set_ground_checked(self, on):
         """プログラムから地上モードを切りかえる（ツアーや日食の場面では、飛ばずにすぐ切りかえる）。"""
         self._ground_instant = True
@@ -2044,6 +2129,8 @@ class MainWindow(QMainWindow):
         self.sl_mag.setEnabled(not on)
         self.btn_ground.setText(tr("🚀 宇宙へ戻る") if on else tr("🔭 地上から見る"))
         self.btn_airless.setEnabled(on)
+        if not on and self.btn_scope.isChecked():
+            self.btn_scope.setChecked(False)
         # 1日/秒より速いと空がぐるぐる回って見づらいので、地上では少しゆっくりにする（コマ送りはそのまま）
         if on and self.cb_speed.currentIndex() > 3 and not isinstance(SPEEDS[self.cb_speed.currentIndex()][1], str):
             self.cb_speed.setCurrentIndex(1)

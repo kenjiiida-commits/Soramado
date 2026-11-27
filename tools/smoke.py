@@ -83,6 +83,17 @@ steps += [lambda: w.btn_ecl.setChecked(True), lambda: w.act_equ.setChecked(True)
           lambda: v.set_jd(2378496.5), lambda: v.set_jd(2461371.0), lambda: w._set_ground_checked(False),
           lambda: setattr(v, "dist", 5e6), lambda: v.set_target("earth", fly=False),
           lambda: [a.setChecked(False) for a in (w.act_ecl, w.act_equ, w.act_mer, w.act_altaz)]]
+# 天体望遠鏡モード（宇宙から入る・望遠鏡と接眼レンズを全部・像の向き・追尾・ホイール・宇宙へ戻る）
+steps += [lambda: w._set_ground_checked(False), lambda: w.btn_scope.setChecked(True), lambda: v.look_at("jupiter"),
+          lambda: w.chk_track.setChecked(True), lambda: v.set_jd(v.jd + 0.05), lambda: v.set_jd(v.jd + 0.05),
+          lambda: v.scopeStep.emit(1), lambda: v.scopeStep.emit(1), lambda: v.scopeStep.emit(-1)]
+steps += [(lambda i=i: w.cb_scope.setCurrentIndex(i)) for i in range(w.cb_scope.count())]
+steps += [(lambda i=i: w.cb_eye.setCurrentIndex(i)) for i in range(w.cb_eye.count())]
+steps += [(lambda i=i: w.cb_image.setCurrentIndex(i)) for i in range(w.cb_image.count())]
+steps += [lambda: v.look_at("moon"), lambda: v.look_at("saturn"), lambda: w.btn_airless.setChecked(True),
+          lambda: w.btn_airless.setChecked(False), lambda: w.chk_track.setChecked(False), lambda: v.set_jd(v.jd + 0.01),
+          lambda: w.btn_ground.click(), lambda: v._finish_lift(), lambda: w.btn_scope.setChecked(True),
+          lambda: w.btn_scope.setChecked(False), lambda: w._set_ground_checked(False)]
 for i in range(w.cb_target.count()):
     k = w.cb_target.itemData(i)
     if k: steps.append(lambda k=k: v.set_target(k, fly=False))
@@ -91,6 +102,8 @@ def step():
     if i["n"] >= len(steps):
         if v.lifting():
             errs.append("lift did not finish")
+        if v.scope is not None or w.btn_scope.isChecked():
+            errs.append("scope still on")
         print("steps", len(steps), "errors", len(errs))
         for e in errs[:5]: print(e)
         app.quit(); return
