@@ -2580,7 +2580,7 @@ class MainWindow(QMainWindow):
                 parts.append(f"太陽の高度 {sun_alt:.0f}°（薄明）")
             else:
                 parts.append(tr("夜"))
-            if key in BY_KEY and key not in ("earth",):
+            if key in BY_KEY and key != v.ground_body:
                 alt, az = v.ground_altaz(key)
                 where = f"高度 {alt:.1f}°・方位 {az:.0f}°" if alt > 0 else tr("地平線の下")
                 parts.append(f"{BY_KEY[key].name}: {where}")
