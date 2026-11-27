@@ -1,13 +1,42 @@
 # そらみ窓（Soramado）
 
-Ubuntu で動く、Mitaka のような宇宙シミュレーターです。
-太陽系を 3D で自由に飛び回り、惑星が実際の日付どおりに公転するようすを眺められます。
+<p align="center"><img src="docs/screenshots/hero.jpg" alt="月面から見た地球" width="720"></p>
+
+**Ubuntu で動く、Mitaka のような宇宙シミュレーターです。**
+太陽系から宇宙の大規模構造まで 3D で自由に飛び回り、地上に降りればプラネタリウムに。
+月や火星に降り立って、NASA の本物の地形の上から空を見上げることもできます。
+
+[**⬇ 最新版をダウンロード（DEB）**](https://github.com/kenjiiida-commits/Soramado/releases/latest)　｜　日本語・English　｜　MIT ライセンス　｜　作者: 飯田顕治
 
 > このソフトは国立天文台の Mitaka とは関係のない、独自に作ったソフトです。
 
-**English:** Soramado is a Mitaka-like 3D space simulator for Ubuntu. The menus, toolbar, status bar,
-labels and event tables can be shown in English: choose **View → 言語 / Language → English** and restart.
-(Object descriptions, tour captions and the manual are currently Japanese only.)
+**English:** Soramado is a free 3D space simulator for Ubuntu, in the spirit of Mitaka.
+Fly from the Earth to the edge of the observable universe, watch the sky from anywhere on Earth with a
+realistic atmosphere, look through virtual telescopes, and land on the Moon and Mars with real NASA terrain.
+The interface is available in English: **View → 言語 / Language → English**, then restart.
+(Object descriptions, tour captions and the manual are mostly in Japanese.)
+[See the English summary below.](#english)
+
+## スクリーンショット
+
+| | |
+|:---:|:---:|
+| <img src="docs/screenshots/earth-from-moon.jpg" width="420"><br>月面（静かの海）から見た地球 | <img src="docs/screenshots/moon-day.jpg" width="420"><br>月の昼。空気がないので昼でも星と天の川 |
+| <img src="docs/screenshots/mars-jezero.jpg" width="420"><br>火星・ジェゼロ・クレーター（NASA の地形） | <img src="docs/screenshots/osaka-sky.jpg" width="420"><br>大阪から見た空（大気の色・夕日） |
+| <img src="docs/screenshots/retrograde.jpg" width="420"><br>火星の逆行（大気なし・恒星日のコマ送り） | <img src="docs/screenshots/saturn.jpg" width="420"><br>土星と衛星の軌道 |
+| <img src="docs/screenshots/sombrero.jpg" width="420"><br>ソンブレロ銀河（本物の写真） | <img src="docs/screenshots/galaxy-model.jpg" width="420"><br>銀河を真上から（粒の模式図） |
+
+## インストール（かんたん）
+
+1. [Releases の最新版](https://github.com/kenjiiida-commits/Soramado/releases/latest) から `soramado_x.x.x_all.deb` をダウンロード
+2. 端末で次を実行（ファイル名は、ダウンロードしたものに合わせてください）
+
+```bash
+cd ~/ダウンロード
+sudo apt install ./soramado_*_all.deb
+```
+
+3. アプリ一覧の「そらみ窓」から起動します。惑星の画像や星雲の写真などは、はじめて使うときにダウンロードするか聞かれます（どれも任意）。
 
 ## できること
 
@@ -66,10 +95,10 @@ labels and event tables can be shown in English: choose **View → 言語 / Lang
 
 ### DEB パッケージで入れる（おすすめ）
 
-[Releases](https://github.com/kenjiiida-commits/Soramado/releases) から `soramado_x.x.x_all.deb` をダウンロードして、
+[Releases](https://github.com/kenjiiida-commits/Soramado/releases/latest) から `soramado_x.x.x_all.deb` をダウンロードして、
 
 ```bash
-sudo apt install ./soramado_0.1.0_all.deb
+sudo apt install ./soramado_*_all.deb
 ```
 
 アプリ一覧に「そらみ窓」が出てきます。
@@ -142,3 +171,19 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 惑星の画像（ダウンロードした場合）: [Solar System Scope](https://www.solarsystemscope.com/textures/)（CC BY 4.0）。画像はソフトに同梱しておらず、`~/.local/share/soramado/textures/` に保存されます。
 
 作者: 飯田顕治
+
+<a id="english"></a>
+## English
+
+**Soramado** is a free, open-source 3D space simulator for Ubuntu (Python + PySide6 + OpenGL), inspired by Mitaka.
+
+- **Fly through the universe** — from the Earth's surface to the edge of the observable universe (about 44 billion light-years). Planets, about 80 moons, dwarf planets, comets, 20 spacecraft on their real trajectories (NASA JPL Horizons), about 110,000 stars, real galaxies, nebula photos (DSS2) and a Gaia all-sky Milky Way.
+- **Planetarium on the ground** — any place and any date, with sky colors, twilight, refraction, extinction, light pollution (Bortle scale), landscapes, meteor showers, eclipses and satellites (ISS). Take off into space and land again seamlessly.
+- **Telescope mode** — choose binoculars or telescopes and eyepieces; magnification, true field, limiting magnitude, image orientation and tracking are simulated.
+- **Land on the Moon and Mars** — Apollo sites, Olympus Mons, Jezero crater and more, with real NASA terrain (LRO/LOLA and MGS/MOLA): watch the Earth's phases from the Moon, or Martian blue sunsets.
+- **Sky lines** — ecliptic with the Sun's monthly positions, celestial equator, meridian and alt-azimuth grid.
+- Time control (fast-forward, reverse, sidereal/solar day stepping, planet trails), guided tours, screenshots and video recording.
+
+**Install:** download the `.deb` from the [latest release](https://github.com/kenjiiida-commits/Soramado/releases/latest) and run `sudo apt install ./soramado_*_all.deb`. Requires Ubuntu 25.04 or later and OpenGL 3.3.
+
+**License:** MIT (code). Bundled data have their own licenses (HYG: CC BY-SA 4.0, OpenNGC: CC BY-SA 4.0, d3-celestial: BSD 3-Clause); see `soramado/data/LICENSE-DATA.md`. Author: Kenji Iida.
