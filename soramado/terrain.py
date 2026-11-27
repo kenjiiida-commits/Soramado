@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import threading
 import urllib.request
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,28 +22,32 @@ import numpy as np
 
 from .cosmos import data_dir
 
-W, H = 5760, 2880
-PPD = 16
+W, H = 5760, 2880            # 詳しい版（1/16度ごと）
+LEVELS = {4: (1440, 720), 16: (5760, 2880)}   # 1度あたりの点の数 → (横, 縦)
 
 
 @dataclass(frozen=True)
 class Source:
     body: str
-    urls: tuple
+    urls: dict             # 1度あたりの点の数 → URL の候補
     scale: float           # 値 × scale = 標高 [m]
-    size_mb: float
+    size_mb: dict          # 1度あたりの点の数 → 大きさ [MB]
     credit: str
 
 
 SOURCES = {
-    "moon": Source("moon", (
-        "https://imbrium.mit.edu/DATA/LOLA_GDR/CYLINDRICAL/IMG/LDEM_16.IMG",
-        "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/cylindrical/img/ldem_16.img",
-    ), 0.5, 33.2, "月の地形: NASA / LRO / LOLA（LDEM_16）"),
-    "mars": Source("mars", (
-        "https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg016/megt90n000eb.img",
-        "https://pds-geosciences.wustl.edu/mgs/mgs-m-mola-5-megdr-l3-v1/mgsl_300x/meg016/megt90n000eb.img",
-    ), 1.0, 33.2, "火星の地形: NASA / MGS / MOLA（MEGDR 16ppd）"),
+    "moon": Source("moon", {
+        4: ("https://imbrium.mit.edu/DATA/LOLA_GDR/CYLINDRICAL/IMG/LDEM_4.IMG",
+            "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/cylindrical/img/ldem_4.img"),
+        16: ("https://imbrium.mit.edu/DATA/LOLA_GDR/CYLINDRICAL/IMG/LDEM_16.IMG",
+             "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/cylindrical/img/ldem_16.img"),
+    }, 0.5, {4: 2.1, 16: 33.2}, "月の地形: NASA / LRO / LOLA（LDEM）"),
+    "mars": Source("mars", {
+        4: ("https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg004/megt90n000cb.img",
+            "https://pds-geosciences.wustl.edu/mgs/mgs-m-mola-5-megdr-l3-v1/mgsl_300x/meg004/megt90n000cb.img"),
+        16: ("https://pds-geosciences.wustl.edu/mgs/urn-nasa-pds-mgs_mola_topography_derived/meg016/megt90n000eb.img",
+             "https://pds-geosciences.wustl.edu/mgs/mgs-m-mola-5-megdr-l3-v1/mgsl_300x/meg016/megt90n000eb.img"),
+    }, 1.0, {4: 2.1, 16: 33.2}, "火星の地形: NASA / MGS / MOLA（MEGDR）"),
 }
 
 # 降り立てる場所: (名前, 緯度, 東経)
@@ -78,46 +83,61 @@ def body_name(body: str) -> str:
 EYE_KM = 0.0017              # 目の高さ（1.7m）
 
 
-def path(body: str) -> Path:
-    return data_dir() / f"terrain_{body}.npy"
+def path(body: str, ppd: int = 16) -> Path:
+    return data_dir() / f"terrain_{body}_{ppd}.npy"
 
 
-def available(body: str) -> bool:
-    return path(body).is_file()
+def available(body: str, ppd: int | None = None) -> bool:
+    """標高図があるか（ppd を省くと、どちらかがあれば True）。"""
+    if ppd is None:
+        return any(path(body, k).is_file() for k in LEVELS)
+    return path(body, ppd).is_file()
+
+
+def level(body: str) -> int:
+    """手元にあるいちばん詳しい標高図の細かさ（1度あたりの点の数。無ければ 0）。"""
+    for k in sorted(LEVELS, reverse=True):
+        if path(body, k).is_file():
+            return k
+    return 0
 
 
 _cache: dict = {}
 
 
 def load(body: str):
-    """標高図（int16、メートル）。無ければ None。"""
+    """標高図（int16、メートル）。詳しい版を優先。無ければ None。"""
     if body in _cache:
         return _cache[body]
-    p = path(body)
-    if not p.is_file():
-        return None
-    try:
-        a = np.load(p, mmap_mode="r")
-    except Exception:  # noqa: BLE001
-        return None
-    if a.shape != (H, W):
-        return None
-    _cache[body] = a
-    return a
+    for k in sorted(LEVELS, reverse=True):
+        p = path(body, k)
+        if not p.is_file():
+            continue
+        try:
+            a = np.load(p, mmap_mode="r")
+        except Exception:  # noqa: BLE001
+            continue
+        if a.shape == LEVELS[k][::-1]:
+            _cache[body] = a
+            return a
+    return None
 
 
 def forget(body: str):
     _cache.pop(body, None)
 
 
-def decode(raw: bytes, scale: float) -> np.ndarray:
-    """16bit の生データ → メートルの int16。並び（バイトの順）は、なめらかなほうを選ぶ。"""
-    if len(raw) != W * H * 2:
-        raise ValueError(f"大きさが違います（{len(raw):,} バイト）")
+def decode(raw, scale: float) -> np.ndarray:
+    """16bit の生データ → メートルの int16。大きさから細かさを決め、バイトの並びはなめらかなほうを選ぶ。"""
+    n = len(raw)
+    shape = next(((h, w) for w, h in LEVELS.values() if w * h * 2 == n), None)
+    if shape is None:
+        raise ValueError(f"大きさが違います（{n:,} バイト）")
+    h, w = shape
     best = None
     for dt in ("<i2", ">i2"):
-        a = np.frombuffer(raw, dtype=dt).reshape(H, W)
-        s = a[H // 4: H // 4 + 400, :2000].astype(np.float32)
+        a = np.frombuffer(raw, dtype=dt).reshape(h, w)
+        s = a[h // 4: h // 4 + h // 7, : w // 3].astype(np.float32)
         rough = float(np.mean(np.abs(np.diff(s, axis=1))))
         if best is None or rough < best[0]:
             best = (rough, a)
@@ -129,8 +149,10 @@ def height_km(dem, lat_deg, lon_deg):
     """緯度・東経 [度]（配列でもよい）の標高 [km]（となり4点から補間）。"""
     lat = np.asarray(lat_deg, dtype=np.float64)
     lon = np.mod(np.asarray(lon_deg, dtype=np.float64), 360.0)
-    y = np.clip((90.0 - lat) * PPD - 0.5, 0, H - 1.001)
-    x = lon * PPD - 0.5
+    H, W = dem.shape
+    ppd = W / 360.0
+    y = np.clip((90.0 - lat) * ppd - 0.5, 0, H - 1.001)
+    x = lon * ppd - 0.5
     y0 = np.floor(y).astype(np.int64)
     x0 = np.floor(x).astype(np.int64)
     fy, fx = y - y0, x - x0
@@ -232,16 +254,18 @@ def build(body: str, lat0: float, lon0: float, radius_km: float, rings: int = 11
 
 
 class Downloader:
-    """別スレッドで標高図をダウンロードして、.npy にする。"""
+    """別スレッドで標高図をダウンロードして .npy にする。切れても、次は続きから受け取る。"""
 
-    def __init__(self, body: str):
+    def __init__(self, body: str, ppd: int):
         self.src = SOURCES[body]
         self.body = body
+        self.ppd = ppd
         self.done = False
         self.ok = False
         self.message = ""
         self.bytes = 0
-        self.total = int(self.src.size_mb * 1e6)
+        w, h = LEVELS[ppd]
+        self.total = w * h * 2
         self._cancel = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -251,42 +275,58 @@ class Downloader:
     def cancel(self):
         self._cancel.set()
 
+    def _part(self, url):
+        return path(self.body, self.ppd).with_suffix(f".{zlib.crc32(url.encode()):08x}.part")
+
     def _get(self, url):
-        req = urllib.request.Request(url, headers={"User-Agent": "Soramado (space simulator)"})
+        part = self._part(url)
+        part.parent.mkdir(parents=True, exist_ok=True)
+        have = part.stat().st_size if part.is_file() else 0
+        if have >= self.total:
+            have = 0
+            part.unlink()
+        headers = {"User-Agent": "Soramado (space simulator)"}
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=60) as res:
-            n = res.headers.get("Content-Length")
-            if n:
-                self.total = int(n)
-            chunks = []
-            while True:
-                if self._cancel.is_set():
-                    raise RuntimeError("キャンセルしました")
-                b = res.read(1 << 18)
-                if not b:
-                    break
-                chunks.append(b)
-                self.bytes += len(b)
-        return b"".join(chunks)
+            if have and res.status != 206:       # 続きからを受けつけないサーバーなら、はじめから
+                have = 0
+            self.bytes = have
+            with open(part, "ab" if have else "wb") as fp:
+                while True:
+                    if self._cancel.is_set():
+                        raise RuntimeError("キャンセルしました")
+                    b = res.read(1 << 17)
+                    if not b:
+                        break
+                    fp.write(b)
+                    self.bytes += len(b)
+        if part.stat().st_size != self.total:
+            raise RuntimeError("途中で切れました（次は続きから受け取ります）")
+        raw = part.read_bytes()
+        return raw, part
 
     def _run(self):
         last = None
-        for url in self.src.urls:
+        for url in self.src.urls[self.ppd]:
             if self._cancel.is_set():
                 break
-            self.bytes = 0
             try:
-                raw = self._get(url)
+                raw, part = self._get(url)
                 dem = decode(raw, self.src.scale)
-                p = path(self.body)
-                p.parent.mkdir(parents=True, exist_ok=True)
-                tmp = p.with_suffix(".part.npy")
+                p = path(self.body, self.ppd)
+                tmp = p.with_suffix(".tmp.npy")
                 np.save(tmp, dem)
                 tmp.replace(p)
+                part.unlink(missing_ok=True)
                 forget(self.body)
                 self.ok = True
                 break
             except Exception as exc:  # noqa: BLE001
                 last = exc
+                if "途中で切れました" in str(exc) or "timed out" in str(exc).lower():
+                    break                      # 同じサーバーで続きから受け取れるよう、次の候補には移らない
         if self._cancel.is_set():
             self.message = "キャンセルしました"
         elif not self.ok and last:

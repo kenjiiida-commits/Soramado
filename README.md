@@ -27,7 +27,7 @@ labels and event tables can be shown in English: choose **View → 言語 / Lang
 - クエーサー 約75万個（SDSS）
 - 星雲・銀河の写真 約95個（DSS2 color、ESA ESASky から）：地球の側から見ると本物の写真、横から見ると模式図
 - 天の川の全天写真（ESA Gaia の星の光の地図、CDS から）：太陽系から見た空と地上の夜空に天の川
-- 月・火星の地形（NASA の標高データ、各約33MB）：月面・火星の地上に降り立ったとき、山やクレーターが本当の形に
+- 月・火星の地形（NASA の標高データ。軽い版 約2MB、詳しい版 約33MB は裏で）：月面・火星の地上に降り立ったとき、山やクレーターが本当の形に
 
 **地上から見る（プラネタリウム）**
 - 日本の主な都市や緯度・経度を指定して、その場所・その時刻の空を表示。昼の青空・夕焼け・薄明・夜空
@@ -135,8 +135,8 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - 系外惑星（ダウンロードした場合）: [NASA Exoplanet Archive](https://exoplanetarchive.ipac.caltech.edu/)（Planetary Systems Composite Parameters）。This research has made use of the NASA Exoplanet Archive, which is operated by the California Institute of Technology, under contract with the National Aeronautics and Space Administration under the Exoplanet Exploration Program.
 - 小惑星・彗星（ダウンロードした場合）: NASA JPL Solar System Dynamics の軌道要素の表（[ELEMENTS.NUMBR](https://ssd.jpl.nasa.gov/dat/ELEMENTS.NUMBR.gz)、[ELEMENTS.COMET](https://ssd.jpl.nasa.gov/dat/ELEMENTS.COMET)）。データはソフトに同梱せず `~/.local/share/soramado/` に保存します
 - クエーサー（ダウンロードした場合）: SDSS DR16Q（Lyke et al. 2020, ApJS 250, 8）。[VizieR](https://vizier.cds.unistra.fr/) のカタログ VII/289 から取得。データはソフトに同梱せず `~/.local/share/soramado/` に保存します
-- 月の地形（ダウンロードした場合）: NASA LRO / LOLA の標高図 LDEM_16（[LOLA PDS データノード](https://imbrium.mit.edu/)、パブリックドメイン）
-- 火星の地形（ダウンロードした場合）: NASA MGS / MOLA の標高図 MEGDR 16ppd（[PDS 地球科学ノード](https://pds-geosciences.wustl.edu/missions/mgs/megdr.html)、パブリックドメイン）
+- 月の地形（ダウンロードした場合）: NASA LRO / LOLA の標高図 LDEM_4・LDEM_16（[LOLA PDS データノード](https://imbrium.mit.edu/)、パブリックドメイン）
+- 火星の地形（ダウンロードした場合）: NASA MGS / MOLA の標高図 MEGDR（4ppd・16ppd）（[PDS 地球科学ノード](https://pds-geosciences.wustl.edu/missions/mgs/megdr.html)、パブリックドメイン）
 - 星座線・星座名: [d3-celestial](https://github.com/ofrohn/d3-celestial)（© 2015 Olaf Frohn、BSD 3-Clause）
 - データのライセンスの詳細は `soramado/data/LICENSE-DATA.md` を見てください
 - 惑星の画像（ダウンロードした場合）: [Solar System Scope](https://www.solarsystemscope.com/textures/)（CC BY 4.0）。画像はソフトに同梱しておらず、`~/.local/share/soramado/textures/` に保存されます。

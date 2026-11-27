@@ -2215,6 +2215,7 @@ class MainWindow(QMainWindow):
 
     def _body_sky_html(self, v):
         real = terrain.available(v.ground_body)
+        lv = terrain.level(v.ground_body)
         src = tr(terrain.SOURCES[v.ground_body].credit)
         if EN_MODE:
             pl = v.ground_place_name()
@@ -2230,7 +2231,7 @@ class MainWindow(QMainWindow):
                      "<p>Fine dust makes the daytime sky butterscotch, while sunsets turn blue around the Sun. "
                      "A day on Mars (a sol) lasts about 24 h 40 min. The two small moons Phobos and Deimos cross the sky, "
                      "and the Earth shines as a bright morning or evening star.</p>")
-            t += f"<p style='color:#888'>Terrain: {src}" if real else \
+            t += f"<p style='color:#888'>Terrain: {src} (1/{lv}°)" if real else \
                 "<p style='color:#888'>Terrain: smooth ground (download the real terrain from the File menu)"
             return t + "</p>"
         pl = v.ground_place_name()
@@ -2245,15 +2246,18 @@ class MainWindow(QMainWindow):
                  f"<p>{pl}（緯度 {v.gb_lat:+.2f}°・経度 {v.gb_lon:+.2f}°）</p>"
                  "<p>昼の空は、細かいちりで黄土色（バタースコッチ色）に見えます。夕焼けは逆に、太陽のまわりが青くなります。"
                  "火星の1日は約24時間40分。小さな2つの月フォボスとダイモスが空を動き、地球は明るい明けの明星・宵の明星として見えます。</p>")
-        t += f"<p style='color:#888'>地形: {src}" if real else \
+        t += f"<p style='color:#888'>地形: {src}（1/{lv}度ごと）" if real else \
             "<p style='color:#888'>地形: なだらかな地面（「ファイル」メニューから本物の地形をダウンロードできます）"
         return t + "</p>"
 
     def _set_body(self, body, place=None, animate=True):
         """地上モードで立つ天体を変える（月・火星なら、地形のデータを用意する）。"""
         v = self.view
-        if body != "earth" and not terrain.available(body) and not self._ask_terrain(body):
-            pass                       # ダウンロードしなくても、なだらかな地面で降りられる
+        if body != "earth":
+            if not terrain.available(body):
+                self._ask_terrain(body)          # ダウンロードしなくても、なだらかな地面で降りられる
+            elif self.settings.value(f"terrain/want_{body}", False) in (True, "true"):
+                self._start_terrain_bg(body)     # 詳しい版がまだなら、裏で続きを受け取る
         self.cb_body.setCurrentIndex(max(0, self.cb_body.findData(body)))
         self._fill_places(body)
         if body == "earth":
@@ -2277,25 +2281,37 @@ class MainWindow(QMainWindow):
         self.view.setFocus()
 
     def _ask_terrain(self, body):
-        """地形のデータをダウンロードするか聞いて、するならダウンロードする。"""
+        """地形のデータをダウンロードするか聞いて、するなら軽い版をすぐに、詳しい版を裏でダウンロードする。"""
         src = terrain.SOURCES[body]
         nm = terrain.body_name(body)
         if EN_MODE:
             title = f"{nm} terrain"
-            msg = (f"Download the real terrain (elevation data) of the {nm}?\n\n{tr(src.credit)}\n"
-                   f"About {src.size_mb:.0f} MB.\n\nIf you skip this, you will land on smooth ground "
-                   "(you can download it later from the File menu).")
+            msg = (f"Download the real terrain (elevation data) of the {nm}?\n\n{tr(src.credit)}\n\n"
+                   f"First a light version (about {src.size_mb[4]:.0f} MB) so you can land right away, then the detailed "
+                   f"version (about {src.size_mb[16]:.0f} MB) in the background while you use the app.\n\n"
+                   "If you skip this, you will land on smooth ground (you can download it later from the File menu).")
         else:
             title = f"{nm}の地形"
-            msg = (f"{nm}の本物の地形（標高のデータ）をダウンロードしますか？\n\n{src.credit}\n"
-                   f"通信量は約{src.size_mb:.0f}MB です。\n\n"
-                   "ダウンロードしないときは、なだらかな地面に降りることになります（あとで「ファイル」メニューからダウンロードできます）。")
+            msg = (f"{nm}の本物の地形（標高のデータ）をダウンロードしますか？\n\n{src.credit}\n\n"
+                   f"まず軽い版（約{src.size_mb[4]:.0f}MB）を受け取って、すぐに降り立ちます。"
+                   f"詳しい版（約{src.size_mb[16]:.0f}MB）は、ソフトを使っているあいだに裏で受け取り、終わったら地形が細かくなります。\n\n"
+                   "ダウンロードしないときは、なだらかな地面に降ります（あとで「ファイル」メニューからダウンロードできます）。")
         if QMessageBox.question(self, title, msg) != QMessageBox.Yes:
             return False
-        return self._download_terrain(body)
+        return self._get_terrain(body)
 
-    def _download_terrain(self, body):
-        dl = terrain.Downloader(body)
+    def _get_terrain(self, body):
+        """軽い版が無ければ待って受け取り、詳しい版は裏で受け取る。"""
+        self.settings.setValue(f"terrain/want_{body}", True)
+        ok = terrain.available(body, 4) or self._download_terrain(body, 4)
+        if ok:
+            self.view.reload_terrain()
+        self._start_terrain_bg(body)
+        return ok or terrain.available(body)
+
+    def _download_terrain(self, body, ppd):
+        """待ちながら受け取る（軽い版用）。"""
+        dl = terrain.Downloader(body, ppd)
         nm = terrain.body_name(body)
         title = f"{nm} terrain" if EN_MODE else f"{nm}の地形"
         label = f"Downloading the {nm} terrain…" if EN_MODE else f"{nm}の地形をダウンロードしています…"
@@ -2312,17 +2328,63 @@ class MainWindow(QMainWindow):
             time.sleep(0.05)
         dlg.close()
         if dl.ok:
-            self.view.reload_terrain()
-            self._update_panel(force=True)
             return True
         if "キャンセル" not in dl.message:
             QMessageBox.warning(self, title, tr("ダウンロードできませんでした。\n\n") + dl.message)
         return False
 
-    def _download_terrain_menu(self, body):
-        if self._download_terrain(body):
+    def _start_terrain_bg(self, body):
+        """詳しい版を裏で受け取る（前に切れていたら続きから）。"""
+        if terrain.available(body, 16):
+            return
+        bg = getattr(self, "_terrain_bg", None)
+        if bg is None:
+            self._terrain_bg = bg = {}
+            self._terrain_timer = QTimer(self)
+            self._terrain_timer.timeout.connect(self._poll_terrain_bg)
+            self._terrain_label = QLabel()
+            self.statusBar().addPermanentWidget(self._terrain_label)
+        if body in bg and not bg[body].done:
+            return
+        dl = terrain.Downloader(body, 16)
+        bg[body] = dl
+        dl.start()
+        self._terrain_timer.start(500)
+        self._poll_terrain_bg()
+
+    def _poll_terrain_bg(self):
+        bg = self._terrain_bg
+        texts = []
+        for body, dl in list(bg.items()):
             nm = terrain.body_name(body)
-            QMessageBox.information(self, tr("地形"), f"The {nm} terrain is ready." if EN_MODE else f"{nm}の地形を用意しました。")
+            if not dl.done:
+                if EN_MODE:
+                    texts.append(f"Detailed {nm} terrain {dl.bytes / 1e6:,.1f} / {dl.total / 1e6:,.1f} MB")
+                else:
+                    texts.append(f"{nm}の詳しい地形 {dl.bytes / 1e6:,.1f} / {dl.total / 1e6:,.1f} MB")
+                continue
+            del bg[body]
+            if dl.ok:
+                if self.view.ground_body == body:
+                    self.view.reload_terrain()
+                    self._update_panel(force=True)
+                msg = f"The detailed {nm} terrain is ready." if EN_MODE else f"{nm}の詳しい地形を受け取りました。"
+            else:
+                msg = (f"Could not get the detailed {nm} terrain ({dl.message}). It resumes next time."
+                       if EN_MODE else f"{nm}の詳しい地形を受け取れませんでした（{dl.message}）。次は続きから受け取ります。")
+            self.statusBar().showMessage(msg, 15000)
+        self._terrain_label.setText("　".join(texts))
+        self._terrain_label.setVisible(bool(texts))
+        if not bg:
+            self._terrain_timer.stop()
+
+    def _download_terrain_menu(self, body):
+        if self._get_terrain(body):
+            nm = terrain.body_name(body)
+            QMessageBox.information(self, tr("地形"), (
+                f"The light version of the {nm} terrain is ready. The detailed version continues in the background "
+                "(see the status bar)." if EN_MODE else
+                f"{nm}の地形（軽い版）を用意しました。詳しい版は裏で受け取っています（下のステータスバーに進み具合が出ます）。"))
 
     @staticmethod
     def _latlon_text(lat, lon):

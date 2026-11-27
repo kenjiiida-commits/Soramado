@@ -46,3 +46,20 @@ def test_places_are_on_the_body():
         assert body in T.SOURCES
         for name, lat, lon in places:
             assert -90 <= lat <= 90 and -180 <= lon <= 180, name
+
+
+def test_light_version_and_level(tmp_path, monkeypatch):
+    monkeypatch.setattr(T, "data_dir", lambda: tmp_path)
+    w, h = T.LEVELS[4]
+    raw = (np.add.outer(np.arange(h), np.arange(w)) % 1000).astype(">i2").tobytes()
+    dem = T.decode(raw, 1.0)
+    assert dem.shape == (h, w)
+    assert T.level("mars") == 0
+    np.save(T.path("mars", 4), dem)
+    T.forget("mars")
+    assert T.level("mars") == 4 and T.available("mars") and not T.available("mars", 16)
+    got = T.load("mars")
+    assert got.shape == (h, w)
+    # 1/4度ごとの図でも、高さの読み取りが合う（緯度 90-0.125*... の点の中心）
+    assert abs(float(T.height_km(got, 90 - 0.125 - 10 * 0.25, 0.125 + 20 * 0.25)) - 0.030) < 1e-6
+    T.forget("mars")
