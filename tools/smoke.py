@@ -94,6 +94,24 @@ steps += [lambda: v.look_at("moon"), lambda: v.look_at("saturn"), lambda: w.btn_
           lambda: w.btn_airless.setChecked(False), lambda: w.chk_track.setChecked(False), lambda: v.set_jd(v.jd + 0.01),
           lambda: w.btn_ground.click(), lambda: v._finish_lift(), lambda: w.btn_scope.setChecked(True),
           lambda: w.btn_scope.setChecked(False), lambda: w._set_ground_checked(False)]
+# ドーム（魚眼）表示：地上・宇宙・選ぶ・画像・望遠鏡と切りかえ・台本
+def _dome_checks():
+    if v.grab_frame().width() != v.grab_frame().height():
+        errs.append("dome frame not square")
+    v.pick_star(v.width() / 2, v.height() / 2); v.pick_minor(v.width() / 2, v.height() / 2)
+    if v.screen_ray(2, 2) is not None:
+        errs.append("dome ray outside circle")
+    v._surface_at("moon", v.width() / 2, v.height() / 2)
+steps += [lambda: w._set_ground_checked(True), lambda: w.btn_dome.setChecked(True), lambda: v.set_jd(v.jd + 0.5),
+          _dome_checks, lambda: w.btn_ecl.setChecked(True), lambda: w.act_altaz.setChecked(True),
+          lambda: w.btn_scope.setChecked(True),
+          lambda: errs.append("dome+scope") if w.btn_dome.isChecked() else None,
+          lambda: w.act_dome.setChecked(True), lambda: errs.append("scope+dome") if w.btn_scope.isChecked() else None,
+          lambda: w.act_altaz.setChecked(False), lambda: w.btn_ecl.setChecked(False),
+          lambda: w._set_ground_checked(False), lambda: v.set_target("saturn", fly=False), _dome_checks,
+          lambda: v.set_target("milkyway", fly=False) if v.valid_key("milkyway") else None, _dome_checks,
+          lambda: w.btn_ground.click(), wait, lambda: v._finish_lift(), _dome_checks,
+          lambda: w.btn_dome.setChecked(False), lambda: w._set_ground_checked(False)]
 # 月・火星に降り立つ（地形データなし → 試験用の地形あり、場所をすべて、宇宙から着陸、ダブルクリックで着陸、望遠鏡、ツアーで地球へ）
 import numpy as _np
 from soramado import terrain as _T
@@ -127,7 +145,7 @@ steps += [lambda: w._set_body("mars", animate=False), lambda: w.play_script("待
 steps += [lambda: w.play_script(_scr.SAMPLE, "見本"), wait, wait, wait, wait, wait, lambda: w._tour_go(1),
           wait, wait, lambda: w.stop_tour(), lambda: w.play_script("とぶ 月\n待つ x", "bad"),
           lambda: w.play_script("fly jupiter\norbit 30 1\nzoom 10au\ncaption hi\nwait 0.5\nland moon\n"
-                                "look earth\nfov 10\nscope dob200 9\nscope なし\nlines 黄道 on\nairless on\n"
+                                "look earth\nfov 10\nscope dob200 9\nscope なし\nlines 黄道 on\nairless on\ndome on\nwait 0.2\ndome off\n"
                                 "airless off\ntime sunset\nfly ないもの\nland earth 大阪\nplace 35.36 138.73\n", "en"),
           wait, wait, wait, wait, wait, wait, wait, wait, wait, wait, lambda: w.stop_tour(),
           lambda: w._set_ground_checked(False)]
@@ -147,6 +165,8 @@ def step():
             errs.append("still on " + v.ground_body)
         if v.scope is not None or w.btn_scope.isChecked():
             errs.append("scope still on")
+        if v.dome or w.btn_dome.isChecked():
+            errs.append("dome still on")
         print("steps", len(steps), "errors", len(errs))
         for e in errs[:5]: print(e)
         app.quit(); return

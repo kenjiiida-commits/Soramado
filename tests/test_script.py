@@ -38,3 +38,10 @@ def test_time_and_look():
     assert 2461398 < jd < 2461400
     assert S.look_direction(["南", "40"]) == (180.0, 40.0)
     assert S.look_direction(["土星"]) is None
+
+
+def test_dome_command():
+    cmds = S.parse("ドーム オン\ndome off\n")
+    assert [c.op for c in cmds] == ["ドーム", "ドーム"]
+    with pytest.raises(S.ScriptError):
+        S.parse("ドーム たぶん")

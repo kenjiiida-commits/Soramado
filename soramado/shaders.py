@@ -926,3 +926,43 @@ void main() {
     frag = vec4(col, 1.0);
 }
 """
+
+
+# ---------------------------------------------------------------- ドーム（魚眼）表示
+# 5つの向き（前・右・左・上・下）に描いた絵を、等距離射影の魚眼（中心からの距離＝天頂からの角度）に並べ直す。
+DOME_FS = """#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_front;
+uniform sampler2D u_right;
+uniform sampler2D u_left;
+uniform sampler2D u_up;
+uniform sampler2D u_down;
+uniform float u_half;      // 円の縁までの角度 [rad]（180度のドームなら π/2）
+out vec4 frag;
+vec2 uvOf(vec3 d, vec3 F, vec3 R, vec3 U) {
+    float z = dot(d, F);
+    return vec2(dot(d, R) / z, dot(d, U) / z) * 0.5 + 0.5;
+}
+void main() {
+    vec2 p = v_uv * 2.0 - 1.0;
+    float r = length(p);
+    if (r > 1.0) { frag = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    float th = r * u_half;
+    float ph = atan(p.y, p.x);
+    vec3 d = vec3(sin(th) * cos(ph), sin(th) * sin(ph), cos(th));   // x:右 y:上 z:前
+    vec3 a = abs(d);
+    vec3 c;
+    if (d.z >= a.x && d.z >= a.y) {
+        c = texture(u_front, uvOf(d, vec3(0, 0, 1), vec3(1, 0, 0), vec3(0, 1, 0))).rgb;
+    } else if (a.x >= a.y) {
+        if (d.x > 0.0) c = texture(u_right, uvOf(d, vec3(1, 0, 0), vec3(0, 0, -1), vec3(0, 1, 0))).rgb;
+        else           c = texture(u_left,  uvOf(d, vec3(-1, 0, 0), vec3(0, 0, 1), vec3(0, 1, 0))).rgb;
+    } else {
+        if (d.y > 0.0) c = texture(u_up,   uvOf(d, vec3(0, 1, 0), vec3(1, 0, 0), vec3(0, 0, -1))).rgb;
+        else           c = texture(u_down, uvOf(d, vec3(0, -1, 0), vec3(1, 0, 0), vec3(0, 0, 1))).rgb;
+    }
+    // 縁をほんの少しぼかす（ドームの縁のギザギザを目立たなくする）
+    c *= smoothstep(1.0, 0.995, r);
+    frag = vec4(c, 1.0);
+}
+"""

@@ -92,6 +92,7 @@ HELP_TEXT = tr("""<h3>操作方法</h3>
 <tr><td><b>Ctrl+R</b></td><td>録画の開始・停止（ビデオ/Soramado、ffmpeg が必要）</td></tr>
 <tr><td><b>Ctrl+E</b></td><td>日食・月食の一覧</td></tr>
 <tr><td><b>Ctrl+L</b></td><td>黄道（太陽の通り道）の線を出す・消す</td></tr>
+<tr><td><b>Ctrl+D</b></td><td>ドーム（魚眼）表示にする・やめる</td></tr>
 <tr><td><b>Ctrl+F</b></td><td>天体を名前で探す（星座・星雲・星団。小惑星・系外惑星はダウンロードしたとき）</td></tr>
 <tr><td><b>星座名をダブルクリック</b></td><td>星座の解説（見ごろ・見つけ方・神話）</td></tr>
 </table>
@@ -229,6 +230,11 @@ class MainWindow(QMainWindow):
         self.btn_scope.setCheckable(True)
         self.btn_scope.setToolTip(tr("地上から、天体望遠鏡や双眼鏡でのぞいたように見ます"))
         tb.addWidget(self.btn_scope)
+        self.btn_dome = QPushButton(tr("◓ ドーム"))
+        self.btn_dome.setCheckable(True)
+        self.btn_dome.setToolTip(tr("ドーム（魚眼）表示：空や宇宙を、プラネタリウムのように円の中にまるごと映します（Ctrl+D）"))
+        self.btn_dome.toggled.connect(self._on_dome)
+        tb.addWidget(self.btn_dome)
         self._build_scope_bar()
         self.cb_body = QComboBox()
         for key, label in (("earth", "🌏 地球"), ("moon", "🌕 月"), ("mars", "🔴 火星")):
@@ -461,6 +467,11 @@ class MainWindow(QMainWindow):
         self.act_qso = self._toggle(m_view, tr("クエーサー"), "show_quasars")
         self.act_cmb = self._toggle(m_view, tr("宇宙マイクロ波背景放射"), "show_cmb")
         m_view.addSeparator()
+        self.act_dome = QAction(tr("ドーム（魚眼）表示"), self, checkable=True)
+        self.act_dome.setShortcut(QKeySequence("Ctrl+D"))
+        self.act_dome.toggled.connect(self.btn_dome.setChecked)
+        self.btn_dome.toggled.connect(self.act_dome.setChecked)
+        m_view.addAction(self.act_dome)
         act_full = QAction(tr("全画面表示"), self, checkable=True)
         act_full.setShortcut(QKeySequence("F11"))
         act_full.toggled.connect(lambda on: self.showFullScreen() if on else self.showNormal())
@@ -711,7 +722,7 @@ class MainWindow(QMainWindow):
 
     def save_picture(self):
         path = recorder.picture_path()
-        img = self.view.grabFramebuffer()
+        img = self.view.grab_frame()
         if img.save(str(path)):
             self.statusBar().showMessage(f"画像を保存しました: {path}", 8000)
         else:
@@ -731,7 +742,7 @@ class MainWindow(QMainWindow):
                 self.btn_rec.setChecked(False)
                 self.btn_rec.blockSignals(False)
                 return
-            img = v.grabFramebuffer()
+            img = v.grab_frame()
             self._rec = recorder.VideoRecorder(recorder.video_path(), img.width(), img.height())
             v.start_recording(self._rec_frame)
             self.btn_rec.setText(tr("⏹ 停止 0:00"))
@@ -2347,6 +2358,8 @@ class MainWindow(QMainWindow):
                 self._apply_scope_ui()
         elif op == "大気なし":
             self.btn_airless.setChecked(scr.parse_onoff(a[0]))
+        elif op == "ドーム":
+            self.btn_dome.setChecked(scr.parse_onoff(a[0]))
         elif op == "線":
             attr = scr.LINES[a[0].lower()]
             act = {"show_ecliptic": self.act_ecl, "show_equator": self.act_equ, "show_meridian": self.act_mer,
@@ -2492,7 +2505,20 @@ class MainWindow(QMainWindow):
         self.view.set_scope(t, scopes.EYEPIECES[self.cb_eye.currentIndex()], self.cb_image.currentData(),
                             self.chk_track.isChecked())
 
+    def _on_dome(self, on):
+        v = self.view
+        if on and self.btn_scope.isChecked():
+            self.btn_scope.setChecked(False)        # 望遠鏡とドームは同時には使えない
+        v.set_dome(on)
+        if on:
+            self.statusBar().showMessage(
+                tr("ドーム表示：地上では天頂が真ん中、見ている方角が下になります。左右にドラッグすると回ります。"
+                   "宇宙では見ている向きが真ん中です。画像や動画は円の入った正方形で保存されます"), 10000)
+        v.setFocus()
+
     def _on_scope(self, on):
+        if on and self.btn_dome.isChecked():
+            self.btn_dome.setChecked(False)
         self.scope_bar.setVisible(on)
         if on:
             if not self.btn_ground.isChecked():

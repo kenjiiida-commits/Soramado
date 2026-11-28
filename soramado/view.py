@@ -360,6 +360,10 @@ class SpaceView(QOpenGLWidget):
         self._vclock = 0.0
         self._on_frame = None
 
+        self.dome = False            # ドーム（魚眼）表示
+        self._dome_on = False        # 文字や印を魚眼の位置に描いている最中
+        self._dome_fbos = None
+        self._target_fb = 0          # 絵を描く先（ふつうは画面そのもの）
         self.script_orbit = None     # 台本の「回る」：(角速度[rad/s], 終わる時刻)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -1186,7 +1190,7 @@ class SpaceView(QOpenGLWidget):
                 self.script_orbit = None
         if self.recording and self._on_frame:
             # 1コマずつ確実に描いて、録画に渡す
-            self._on_frame(self.grabFramebuffer())
+            self._on_frame(self.grab_frame())
         elif (not self.paused or self._fly or self._lift or self.script_orbit or self._idle_frames < 2 or self._meteor_live
               or getattr(self, "_line_fading", False)):
             QOpenGLWidget.update(self)
@@ -1236,6 +1240,7 @@ class SpaceView(QOpenGLWidget):
         self.m_conlines = _Mesh(self.stars.line_vertices(), [(0, 3)], GL_LINES)
         self.p_galaxy = prog(shaders.GALAXY_VS, shaders.GALAXY_FS)
         self.p_tone = prog(shaders.TONE_VS, shaders.TONE_FS)
+        self.p_dome = prog(shaders.TONE_VS, shaders.DOME_FS)
         self.p_photo = prog(shaders.PHOTO_VS, shaders.PHOTO_FS)
         self.p_mwsky = prog(shaders.MWSKY_VS, shaders.MWSKY_FS)
         self.p_land = prog(shaders.SKY_VS, shaders.LAND_FS)
@@ -1782,11 +1787,7 @@ class SpaceView(QOpenGLWidget):
         if self._sun_far < 3000.0 and not self.is_exo(self.target):
             return            # 太陽系の中を見ているときは、惑星や衛星のじゃまになるので出さない
         rel = self.exo.pos - self._eye
-        clip = np.column_stack([rel, np.ones(len(rel))]) @ viewproj.T
-        ok = clip[:, 3] > 0
-        cw = np.where(ok, clip[:, 3], 1.0)
-        sx = (clip[:, 0] / cw * 0.5 + 0.5) * w
-        sy = (0.5 - clip[:, 1] / cw * 0.5) * h
+        sx, sy, _, ok = self._to_screen(rel, viewproj, w, h)
         ok &= (sx > -10) & (sx < w + 10) & (sy > -10) & (sy < h + 10)
         dist = np.linalg.norm(rel, axis=1)
         # 太陽系の中から見るときは、空いっぱいに散らばるので、近い恒星（約300光年まで）にしぼる
@@ -1885,7 +1886,7 @@ class SpaceView(QOpenGLWidget):
         p.setUniformValue1f("u_dt", float(self.jd - mpl.REF_JD))
         p.setUniformValue("u_sun", QVector3D(*sun_rel))
         # 引いて見るほど点が重なって白くなりすぎるので、1つ1つを暗くする
-        h = max(1, self.height())
+        h = max(1, getattr(self, "_rh", self.height()))
         focal = h / (2 * math.tan(math.radians(self._fov) / 2))
         d = max(min(sun_far, self.dist), 3.0)
         p.setUniformValue1f("u_gain", float(k * 0.083 * (12.0 / d) ** (0.8 if d < 12.0 else 1.5) * (focal / 1000.0) ** 2))
@@ -1920,10 +1921,7 @@ class SpaceView(QOpenGLWidget):
             return -1
         pos = self.mp.positions(self.jd) - self._eye
         w, h = max(1, self.width()), max(1, self.height())
-        clip = np.column_stack([pos, np.ones(len(pos))]) @ self._viewproj.T
-        ok = clip[:, 3] > 0
-        sx = (clip[:, 0] / np.where(ok, clip[:, 3], 1) * 0.5 + 0.5) * w
-        sy = (0.5 - clip[:, 1] / np.where(ok, clip[:, 3], 1) * 0.5) * h
+        sx, sy, _, ok = self._to_screen(pos, self._viewproj, w, h)
         d2 = np.where(ok, (sx - x) ** 2 + (sy - y) ** 2, 1e18)
         # 近いものの中から、明るい（大きい）ものを優先する
         near = np.nonzero(d2 < radius * radius)[0]
@@ -2027,7 +2025,7 @@ class SpaceView(QOpenGLWidget):
             fbo = QOpenGLFramebufferObject(size, fmt)
             if not fbo.isValid():
                 self._glow_fbo = False
-                f.glBindFramebuffer(GL_FRAMEBUFFER, self.defaultFramebufferObject())
+                f.glBindFramebuffer(GL_FRAMEBUFFER, self._target_fb)
                 return False
             self._glow_fbo = fbo
         self._glow_fbo.bind()
@@ -2038,7 +2036,7 @@ class SpaceView(QOpenGLWidget):
         return True
 
     def _glow_end(self, f):
-        f.glBindFramebuffer(GL_FRAMEBUFFER, self.defaultFramebufferObject())
+        f.glBindFramebuffer(GL_FRAMEBUFFER, self._target_fb)
         f.glDisable(GL_DEPTH_TEST)
         p = self.p_tone
         p.bind()
@@ -2163,6 +2161,142 @@ class SpaceView(QOpenGLWidget):
                 fwd = focus - eye
                 fwd /= np.linalg.norm(fwd)
                 up0 = np.array([0.0, 0.0, 1.0])
+        if self.dome:
+            self._paint_dome(f, eye, fwd, up0, w, h, dpr)
+            return
+        self._dome_on = False
+        self._target_fb = self.defaultFramebufferObject()
+        rel, viewproj = self._render_scene(f, eye, fwd, up0, w, h)
+        self._draw_overlay(rel, viewproj, w, h)
+
+    # ---------------------------------------------------------- ドーム（魚眼）表示
+
+    DOME_HALF = math.pi / 2          # 円の縁は中心から90度（180度のドーム）
+
+    def set_dome(self, on: bool):
+        self.dome = bool(on)
+        self.update()
+
+    def _dome_axes(self, fwd, up0):
+        """ドームの中心の向きと、画面の上・右の向き（世界座標）。"""
+        if self.ground:
+            # 地上：天頂を中心に。見ている方角が円の下になる（プラネタリウムの客席の前）
+            zen = self._gframe[0]
+            front = self._ground_dir(self.g_az, 0.0)
+            c, u = zen, -front
+        else:
+            c, u = fwd, up0
+        c = c / np.linalg.norm(c)
+        u = u - c * float(np.dot(u, c))
+        if np.linalg.norm(u) < 1e-9:
+            u = np.array([1.0, 0.0, 0.0]) - c * c[0]
+        u /= np.linalg.norm(u)
+        r = np.cross(c, u)
+        return r, u, c
+
+    def dome_geometry(self):
+        """画面の中のドームの円：(中心x, 中心y, 半径)。"""
+        w, h = max(1, self.width()), max(1, self.height())
+        return w / 2.0, h / 2.0, min(w, h) / 2.0
+
+    def _paint_dome(self, f, eye, fwd, up0, w, h, dpr):
+        right, up, c = self._dome_axes(fwd, up0)
+        side = int(min(w, h) * dpr)
+        n = int(max(256, min(2048, side * 0.6)))
+        if self._dome_fbos is None or self._dome_fbos[0].size() != QSize(n, n):
+            fmt = QOpenGLFramebufferObjectFormat()
+            fmt.setAttachment(QOpenGLFramebufferObject.Depth)
+            self._dome_fbos = [QOpenGLFramebufferObject(QSize(n, n), fmt) for _ in range(5)]
+        # 前・右・左・上・下（DOME_FS と同じ並び）
+        faces = [(c, up), (right, up), (-right, up), (up, -c), (-up, c)]
+        fov0 = self._fov
+        self._dome_on = False
+        rel = viewproj = None
+        for fbo, (fd, ud) in zip(self._dome_fbos, faces):
+            fbo.bind()
+            self._target_fb = fbo.handle()
+            f.glViewport(0, 0, n, n)
+            f.glClearColor(0.0, 0.0, 0.0, 1.0)
+            f.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            f.glEnable(GL_DEPTH_TEST)
+            self._fov = 90.0
+            r_, vp_ = self._render_scene(f, eye, fd, ud, n / dpr, n / dpr)
+            if rel is None:
+                rel, viewproj = r_, vp_
+        self._target_fb = self.defaultFramebufferObject()
+        f.glBindFramebuffer(GL_FRAMEBUFFER, self._target_fb)
+        f.glViewport(0, 0, int(w * dpr), int(h * dpr))
+        f.glClearColor(0.0, 0.0, 0.0, 1.0)
+        f.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        f.glDisable(GL_DEPTH_TEST)
+        f.glDisable(GL_BLEND)
+        cx, cy, R = self.dome_geometry()
+        f.glViewport(int((cx - R) * dpr), int((h - cy - R) * dpr), int(2 * R * dpr), int(2 * R * dpr))
+        p = self.p_dome
+        p.bind()
+        for i, (fbo, name) in enumerate(zip(self._dome_fbos, ("u_front", "u_right", "u_left", "u_up", "u_down"))):
+            f.glActiveTexture(GL_TEXTURE0 + i)
+            f.glBindTexture(GL_TEXTURE_2D, fbo.texture())
+            p.setUniformValue1i(name, i)
+        p.setUniformValue1f("u_half", float(self.DOME_HALF))
+        self.m_glow.draw(f)
+        p.release()
+        f.glActiveTexture(GL_TEXTURE0)
+        f.glViewport(0, 0, int(w * dpr), int(h * dpr))
+        # 文字や印はドームの円の上に描く
+        self._basis = (right, up, c)
+        self._dome_on = True
+        self._fov = 2 * math.degrees(math.atan(h * self.DOME_HALF / (2 * R)))   # 中心付近の大きさが合うように
+        self._draw_overlay(rel, viewproj, w, h)
+        self._fov = fov0
+
+    def _to_screen(self, rel, viewproj, w, h):
+        """位置（カメラから見た向き）の列を画面の位置にする。戻り値: (x, y, 奥行き, 見えるか)。"""
+        rel = np.asarray(rel, float)
+        if self._dome_on:
+            right, up, c = self._basis
+            cx, cy, R = self.dome_geometry()
+            n = np.maximum(np.linalg.norm(rel, axis=1), 1e-300)
+            d = rel / n[:, None]
+            th = np.arccos(np.clip(d @ c, -1.0, 1.0))
+            ph = np.arctan2(d @ up, d @ right)
+            r = th / self.DOME_HALF * R
+            return cx + r * np.cos(ph), cy - r * np.sin(ph), n, th <= self.DOME_HALF
+        clip = np.column_stack([rel, np.ones(len(rel))]) @ viewproj.T
+        ok = clip[:, 3] > 0
+        cw = np.where(ok, clip[:, 3], 1.0)
+        return (clip[:, 0] / cw * 0.5 + 0.5) * w, (0.5 - clip[:, 1] / cw * 0.5) * h, clip[:, 3], ok
+
+    def screen_ray(self, x, y):
+        """画面の点 (x, y) の方向（世界座標の単位ベクトル）。ドームの円の外なら None。"""
+        right, up, fwd = self._basis
+        if self._dome_on:
+            cx, cy, R = self.dome_geometry()
+            dx, dy = (x - cx) / R, (cy - y) / R
+            r = math.hypot(dx, dy)
+            if r > 1.0:
+                return None
+            th, ph = r * self.DOME_HALF, math.atan2(dy, dx)
+            ray = math.cos(th) * fwd + math.sin(th) * (math.cos(ph) * right + math.sin(ph) * up)
+        else:
+            w, h = max(self.width(), 1), max(self.height(), 1)
+            t = math.tan(math.radians(self._fov) / 2)
+            nx, ny = (x / w) * 2 - 1, 1 - (y / h) * 2
+            ray = fwd + nx * t * (w / h) * right + ny * t * up
+        return ray / np.linalg.norm(ray)
+
+    def grab_frame(self) -> QImage:
+        """画像の保存・録画用の絵。ドーム表示のときは、円の入った正方形だけを切り出す。"""
+        img = self.grabFramebuffer()
+        if self.dome:
+            cx, cy, R = self.dome_geometry()
+            k = img.width() / max(1, self.width())
+            img = img.copy(int((cx - R) * k), int((cy - R) * k), int(2 * R * k), int(2 * R * k))
+        return img
+
+    def _render_scene(self, f, eye, fwd, up0, w, h):
+        """宇宙の絵（文字や印を除く）を、いま選んでいる画面（ふつうの画面か、ドームの1面）に描く。"""
+        self._rh = h
         right = np.cross(fwd, up0)
         if np.linalg.norm(right) < 1e-9:
             right = np.array([1.0, 0.0, 0.0])
@@ -2484,7 +2618,7 @@ class SpaceView(QOpenGLWidget):
         if self.ground and not self.airless and self.ground_body == "earth":
             self._draw_sky(f, 1, w, h)
             self._draw_landscape(f, w, h)
-        self._draw_overlay(rel, viewproj, w, h)
+        return rel, viewproj
 
     # ---------------------------------------------------------- ラベル・点
 
@@ -2535,6 +2669,9 @@ class SpaceView(QOpenGLWidget):
     def _project(self, v, viewproj, w, h):
         if self._atm_on() and getattr(self, "_gframe", None) is not None:
             v = self._atm_refract(v)
+        if self._dome_on:
+            x, y, d, ok = self._to_screen(np.asarray(v, float)[None, :], viewproj, w, h)
+            return (float(x[0]), float(y[0]), float(d[0])) if ok[0] else None
         c = viewproj @ np.append(v, 1.0)
         if c[3] <= 0:
             return None
@@ -2558,12 +2695,16 @@ class SpaceView(QOpenGLWidget):
             pl = np.maximum(np.linalg.norm(perp, axis=1), 1e-9)
             r = np.radians(R)
             d = d * np.cos(r)[:, None] + perp / pl[:, None] * np.sin(r)[:, None]
-        v = np.hstack([d * 1000.0, np.ones((len(d), 1))])
-        c = v @ viewproj.T
-        ok = c[:, 3] > 1e-9
-        cw = np.where(ok, c[:, 3], 1.0)
-        nx, ny = c[:, 0] / cw, c[:, 1] / cw
-        ok &= (np.abs(nx) < 4) & (np.abs(ny) < 4)
+        if self._dome_on:
+            sx, sy, _, ok = self._to_screen(d, viewproj, w, h)
+            nx, ny = sx / w * 2 - 1, 1 - sy / h * 2
+        else:
+            v = np.hstack([d * 1000.0, np.ones((len(d), 1))])
+            c = v @ viewproj.T
+            ok = c[:, 3] > 1e-9
+            cw = np.where(ok, c[:, 3], 1.0)
+            nx, ny = c[:, 0] / cw, c[:, 1] / cw
+            ok &= (np.abs(nx) < 4) & (np.abs(ny) < 4)
         if self.ground and not self.airless:
             ok &= (d @ self._gframe[0]) > -0.002
         for u, cr in getattr(self, "_line_hiders", ()):
@@ -2997,6 +3138,8 @@ class SpaceView(QOpenGLWidget):
         for name, az in names:
             a = math.radians(az)
             d = math.cos(a) * north + math.sin(a) * east
+            if self._dome_on:
+                d = d * math.cos(math.radians(6)) + zen * math.sin(math.radians(6))   # ドームの縁の少し内側に
             pr = self._sky_xy(d, viewproj, w, h)
             if not pr or not (0 < pr[0] < w and 0 < pr[1] < h + 40):
                 continue
@@ -3004,7 +3147,7 @@ class SpaceView(QOpenGLWidget):
             painter.setFont(big if main else font)
             painter.setPen(QPen(QColor(255, 120, 90) if name == tr("北") else QColor(230, 200, 140)))
             rect = painter.fontMetrics().boundingRect(name)
-            rect.moveCenter(QPointF(pr[0], min(pr[1] + 18, h - 12)).toPoint())
+            rect.moveCenter(QPointF(pr[0], pr[1] if self._dome_on else min(pr[1] + 18, h - 12)).toPoint())
             painter.drawText(rect, Qt.AlignCenter, name)
             placed.append(rect)
         painter.setFont(font)
@@ -3044,12 +3187,7 @@ class SpaceView(QOpenGLWidget):
         """カタログの銀河の画面上の位置 (x, y, 見かけの半径px, 見えているか)。"""
         rel = self.gcat.center - self._eye
         d = np.maximum(np.linalg.norm(rel, axis=1), 1.0)
-        clip = rel @ viewproj[:3, :3].T + viewproj[:3, 3]
-        wc = rel @ viewproj[3, :3] + viewproj[3, 3]
-        ok = wc > 0
-        wc = np.where(ok, wc, 1.0)
-        x = (clip[:, 0] / wc * 0.5 + 0.5) * w
-        y = (1 - (clip[:, 1] / wc * 0.5 + 0.5)) * h
+        x, y, _, ok = self._to_screen(rel, viewproj, w, h)
         focal = h / (2 * math.tan(math.radians(self._fov) / 2))
         return x, y, self.gcat.radius / d * focal, ok & (x > 0) & (x < w) & (y > 0) & (y < h)
 
@@ -3360,11 +3498,7 @@ class SpaceView(QOpenGLWidget):
         if len(idx) == 0:
             return -1
         d = rel[idx] / dist[idx, None] * 1000.0
-        clip = d @ vp[:3, :3].T + vp[:3, 3]
-        wc = d @ vp[3, :3] + vp[3, 3]
-        ok = wc > 0
-        sx = (clip[:, 0] / np.where(ok, wc, 1) * 0.5 + 0.5) * self.width()
-        sy = (1 - (clip[:, 1] / np.where(ok, wc, 1) * 0.5 + 0.5)) * self.height()
+        sx, sy, _, ok = self._to_screen(d, vp, self.width(), self.height())
         dist = np.hypot(sx - x, sy - y)
         dist[~ok] = 1e9
         near = np.nonzero(dist < radius)[0]
@@ -3386,6 +3520,12 @@ class SpaceView(QOpenGLWidget):
             return
         p0, button, yaw0, pitch0, dist0, az0, alt0, fov0 = self._drag
         d = e.position() - p0
+        if self.ground and self.dome:
+            # ドーム：左右に動かすと、天頂を中心に空が回る（前にする方角が変わる）
+            if button == Qt.LeftButton:
+                self.g_az = az0 + d.x() * math.pi / max(self.height(), 1)
+                self.update()
+            return
         if self.ground:
             if button == Qt.LeftButton:
                 # 画面をつかんで動かす感覚（視野が狭いほどゆっくり。望遠鏡の像が逆さなら、動かす向きも逆）
@@ -3432,12 +3572,9 @@ class SpaceView(QOpenGLWidget):
         """画面の点 (x, y) から天体の表面をさした場所の（緯度, 東経）[度]。当たらなければ None。"""
         if not hasattr(self, "_basis") or self.ground:
             return None
-        right, up, fwd = self._basis
-        w, h = max(self.width(), 1), max(self.height(), 1)
-        t = math.tan(math.radians(self._fov) / 2)
-        nx, ny = (x / w) * 2 - 1, 1 - (y / h) * 2
-        ray = fwd + nx * t * (w / h) * right + ny * t * up
-        ray /= np.linalg.norm(ray)
+        ray = self.screen_ray(x, y)
+        if ray is None:
+            return None
         c = self.display_pos(key) - self._eye
         r = self.display_radius(key)
         b = float(np.dot(ray, c))

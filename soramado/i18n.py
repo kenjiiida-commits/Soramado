@@ -128,6 +128,7 @@ EN_HELP = """<h3>Controls</h3>
 <tr><td><b>Ctrl+R</b></td><td>Start / stop recording (Videos/Soramado, needs ffmpeg)</td></tr>
 <tr><td><b>Ctrl+E</b></td><td>List of eclipses</td></tr>
 <tr><td><b>Ctrl+L</b></td><td>Show/hide the ecliptic line</td></tr>
+<tr><td><b>Ctrl+D</b></td><td>Dome (fisheye) view on/off</td></tr>
 <tr><td><b>Ctrl+F</b></td><td>Find an object by name</td></tr>
 </table>
 <p><b>View from ground (planetarium)</b>: left drag to look around, wheel to change the field of view.</p>
@@ -356,6 +357,13 @@ EN.update({
     "「向く」は地上にいるときに使えます": "\"look\" works only on the ground",
     "太陽が出入りする時刻が見つかりません（極地では、ずっと昼や夜のことがあります）": "No sunrise or sunset found (near the poles it can be day or night all the time)",
     "◎ 望遠鏡": "◎ Telescope",
+    "◓ ドーム": "◓ Dome",
+    "ドーム（魚眼）表示": "Dome (fisheye) view",
+    "ドーム（魚眼）表示：空や宇宙を、プラネタリウムのように円の中にまるごと映します（Ctrl+D）":
+        "Dome (fisheye) view: shows the whole sky or space inside a circle, like a planetarium (Ctrl+D)",
+    "ドーム表示：地上では天頂が真ん中、見ている方角が下になります。左右にドラッグすると回ります。宇宙では見ている向きが真ん中です。画像や動画は円の入った正方形で保存されます":
+        "Dome view: on the ground the zenith is at the center and the direction you face is at the bottom; drag left/right to turn. "
+        "In space the view direction is at the center. Pictures and videos are saved as a square containing the circle",
     "地上から、天体望遠鏡や双眼鏡でのぞいたように見ます": "View from the ground as if through a telescope or binoculars",
     "望遠鏡": "Telescope",
     " 望遠鏡 ": " Telescope ",
