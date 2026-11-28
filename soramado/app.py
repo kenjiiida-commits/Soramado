@@ -2032,6 +2032,10 @@ class MainWindow(QMainWindow):
         f = self.tour_label.font()
         f.setPointSizeF(f.pointSizeF() * 1.3)
         self.tour_label.setFont(f)
+        # 長い字幕でも、宇宙の画面を押しつぶさないように（幅は画面に合わせ、高さは3行まで）
+        self.tour_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.tour_label.setMinimumWidth(80)
+        self.tour_label.setMaximumHeight(int(self.tour_label.fontMetrics().lineSpacing() * 3.3))
         lay.addWidget(self.tour_label, 1)
         self.tour_count = QLabel()
         lay.addWidget(self.tour_count)

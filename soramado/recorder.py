@@ -58,11 +58,26 @@ class VideoRecorder:
     def add(self, img: QImage) -> bool:
         if self.proc.poll() is not None:
             return False
+        if img.isNull():
+            # 一瞬だけ絵が取れなかったとき（ウィンドウの大きさが変わる途中など）は、前のコマをくり返して時間をそろえる
+            if getattr(self, "_last", None) is None:
+                return True
+            data = self._last
+        else:
+            data = None
+        if data is not None:
+            try:
+                self.proc.stdin.write(data)
+            except (BrokenPipeError, OSError):
+                return False
+            self.frames += 1
+            return True
         img = img.convertToFormat(QImage.Format_RGBX8888)
         if img.width() != self.w or img.height() != self.h:
             # 録画中にウィンドウの大きさが変わっても、最初の大きさにそろえる
             img = img.scaled(self.w, self.h)
         data = bytes(img.constBits())[: self.w * self.h * 4]
+        self._last = data
         try:
             self.proc.stdin.write(data)
         except (BrokenPipeError, OSError):
