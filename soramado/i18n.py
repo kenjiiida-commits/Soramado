@@ -358,6 +358,14 @@ EN.update({
     "太陽が出入りする時刻が見つかりません（極地では、ずっと昼や夜のことがあります）": "No sunrise or sunset found (near the poles it can be day or night all the time)",
     "◎ 望遠鏡": "◎ Telescope",
     "◓ ドーム": "◓ Dome",
+    "♪ BGM": "♪ BGM", "曲を選ぶ…": "Choose music…", "BGMなし": "No music", "BGMの曲を選ぶ": "Choose background music",
+    "録画した動画に入れる曲（BGM）を選びます。録画中は鳴らさず、保存した動画にだけ入ります":
+        "Choose background music for recordings. It is not played while recording; it is added to the saved video",
+    "録画した動画に入れる曲: ": "Music added to recordings: ",
+    "音楽 (*.mp3 *.ogg *.oga *.wav *.flac *.m4a *.aac *.opus);;すべてのファイル (*)":
+        "Music (*.mp3 *.ogg *.oga *.wav *.flac *.m4a *.aac *.opus);;All files (*)",
+    "動画にBGMを入れています…": "Adding music to the video…",
+    "動画は保存しましたが、BGMを入れられませんでした。\n\n": "The video was saved, but the music could not be added.\n\n",
     "ドーム（魚眼）表示": "Dome (fisheye) view",
     "ドーム（魚眼）表示：空や宇宙を、プラネタリウムのように円の中にまるごと映します（Ctrl+D）":
         "Dome (fisheye) view: shows the whole sky or space inside a circle, like a planetarium (Ctrl+D)",

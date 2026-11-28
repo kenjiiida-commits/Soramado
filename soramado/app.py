@@ -8,14 +8,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QCoreApplication, QDateTime, QSettings, Qt, QTimer, QUrl
+from PySide6.QtCore import QCoreApplication, QDateTime, QSettings, QStandardPaths, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QImage, QKeySequence
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox, QDockWidget,
                                QFrame, QTextBrowser, QVBoxLayout,
                                QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressDialog, QPushButton, QSlider, QToolBar,
                                QWidget, QHBoxLayout, QSizePolicy, QFileDialog, QListWidget, QListWidgetItem,
-                               QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView)
+                               QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QMenu, QApplication)
 
 from . import __version__, astro, textures
 from .i18n import EN_MODE, tr, trx
@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         self._tour_deadline = None
         self._script = None
         self._rec = None
+        self._bgm = ""
         self._rec_tour = False
         self._tour_timer = QTimer(self)        # 場面の切り替えは、ビューの時計で判定する
         self._tour_timer.timeout.connect(self._tour_check)
@@ -257,6 +258,15 @@ class MainWindow(QMainWindow):
         self.btn_rec.setToolTip(tr("画面を動画（MP4）に録画します"))
         self.btn_rec.toggled.connect(self._on_record)
         tb.addWidget(self.btn_rec)
+        self.btn_bgm = QPushButton(tr("♪ BGM"))
+        self.btn_bgm.setToolTip(tr("録画した動画に入れる曲（BGM）を選びます。録画中は鳴らさず、保存した動画にだけ入ります"))
+        m = QMenu(self.btn_bgm)
+        m.addAction(tr("曲を選ぶ…"), self._choose_bgm)
+        m.addAction(tr("BGMなし"), lambda: self._set_bgm(""))
+        self.btn_bgm.setMenu(m)
+        tb.addWidget(self.btn_bgm)
+        saved = str(self.settings.value("rec/bgm", "") or "")
+        self._set_bgm(saved if saved and Path(saved).is_file() else "")
         tb.addSeparator()
 
         self.btn_play = QPushButton(tr("⏸ 停止"))
@@ -744,6 +754,8 @@ class MainWindow(QMainWindow):
                 return
             img = v.grab_frame()
             self._rec = recorder.VideoRecorder(recorder.video_path(), img.width(), img.height())
+            if self._bgm:
+                self._rec.set_music(self._bgm)
             v.start_recording(self._rec_frame)
             self.btn_rec.setText(tr("⏹ 停止 0:00"))
             self.btn_rec.setStyleSheet("QPushButton { color: #ff5050; font-weight: bold; }")
@@ -754,7 +766,13 @@ class MainWindow(QMainWindow):
             rec, self._rec = self._rec, None
             if rec is None:
                 return
+            if any(f for _, f in rec.music):
+                self.statusBar().showMessage(tr("動画にBGMを入れています…"))
+                QApplication.processEvents()
             ok, err = rec.finish()
+            if ok and rec.music_error:
+                QMessageBox.warning(self, tr("録画"), tr("動画は保存しましたが、BGMを入れられませんでした。\n\n")
+                                    + rec.music_error)
             if ok:
                 box = QMessageBox(self)
                 box.setWindowTitle(tr("録画"))
@@ -766,6 +784,25 @@ class MainWindow(QMainWindow):
                     QDesktopServices.openUrl(QUrl.fromLocalFile(str(rec.path.parent)))
             else:
                 QMessageBox.warning(self, tr("録画"), tr("動画を保存できませんでした。\n\n") + err[-800:])
+
+    def _choose_bgm(self):
+        start = self._bgm or QStandardPaths.writableLocation(QStandardPaths.MusicLocation) or str(Path.home())
+        path, _ = self._fd(QFileDialog.getOpenFileName, self, tr("BGMの曲を選ぶ"), start,
+                           tr("音楽 (*.mp3 *.ogg *.oga *.wav *.flac *.m4a *.aac *.opus);;すべてのファイル (*)"))
+        if path:
+            self._set_bgm(path)
+
+    def _set_bgm(self, path):
+        self._bgm = path or ""
+        self.settings.setValue("rec/bgm", self._bgm)
+        if self._bgm:
+            self.btn_bgm.setText("♪ " + Path(self._bgm).stem[:14])
+            self.btn_bgm.setToolTip(tr("録画した動画に入れる曲: ") + self._bgm)
+        else:
+            self.btn_bgm.setText(tr("♪ BGM"))
+            self.btn_bgm.setToolTip(tr("録画した動画に入れる曲（BGM）を選びます。録画中は鳴らさず、保存した動画にだけ入ります"))
+        if getattr(self, "_rec", None) is not None:
+            self._rec.set_music(self._bgm or None)
 
     def _rec_frame(self, img):
         rec = self._rec
@@ -2142,7 +2179,20 @@ class MainWindow(QMainWindow):
         except (OSError, UnicodeDecodeError) as exc:
             QMessageBox.warning(self, tr("台本"), tr("台本を読めませんでした。\n\n") + str(exc))
             return
+        self._script_dir = str(Path(path).parent)
         self.play_script(text, Path(path).stem, record)
+
+    def _script_music_path(self, name):
+        """台本の「音楽」に書いた曲を探す（そのままの場所 → 台本と同じフォルダ → ミュージック）。"""
+        p = Path(name).expanduser()
+        cands = [p] if p.is_absolute() else [
+            Path(getattr(self, "_script_dir", "") or Path.home()) / p,
+            Path(QStandardPaths.writableLocation(QStandardPaths.MusicLocation) or Path.home()) / p,
+            Path.home() / p]
+        for q in cands:
+            if q.is_file():
+                return str(q)
+        raise ValueError(trx(f"曲「{name}」が見つかりません（台本と同じフォルダか、ミュージックに置いてください）"))
 
     def play_script(self, text, title, record=False):
         try:
@@ -2360,6 +2410,14 @@ class MainWindow(QMainWindow):
             self.btn_airless.setChecked(scr.parse_onoff(a[0]))
         elif op == "ドーム":
             self.btn_dome.setChecked(scr.parse_onoff(a[0]))
+        elif op == "音楽":
+            name = c.text.strip() if getattr(c, "text", "") else " ".join(a)
+            if name.lower() in ("なし", "止める", "off", "オフ", "none", "stop"):
+                path = None
+            else:
+                path = self._script_music_path(name)
+            if getattr(self, "_rec", None) is not None:
+                self._rec.set_music(path)
         elif op == "線":
             attr = scr.LINES[a[0].lower()]
             act = {"show_ecliptic": self.act_ecl, "show_equator": self.act_equ, "show_meridian": self.act_mer,

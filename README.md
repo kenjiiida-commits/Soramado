@@ -64,6 +64,7 @@ sudo apt install ./soramado_*_all.deb
 - 天体望遠鏡モード・空の線（黄道・天の赤道・子午線・目盛り）・光害・風景・地上と宇宙を飛んで行き来
 - 台本で自動上映：テキストに「飛ぶ 木星」「待つ 3」「字幕 …」「着陸 月」と書くと、そのとおりに動き、そのまま動画にもできる
 - ドーム（魚眼）表示：空や宇宙を円の中にまるごと映す。画像・動画は正方形のドームマスター形式で、プラネタリウムの魚眼プロジェクターにそのまま映せる
+- 録画にBGM：選んだ曲を、録画した動画に重ねる（短い曲はくり返し、最後はふわっと消える）。台本の「音楽」命令で場面ごとに曲を変えられる
 - 星座の名前をダブルクリックすると、88星座すべての見ごろ・見つけ方・神話や由来
 
 **天文現象**（「天文現象」メニュー）
@@ -187,6 +188,7 @@ DEB を自分で作るときは `bash packaging/build_deb.sh`（`dist/` にで�
 - Time control (fast-forward, reverse, sidereal/solar day stepping, planet trails), guided tours, screenshots and video recording.
 - **Scripted shows** — write a plain-text script ("fly jupiter", "wait 3", "caption …", "land moon") and Soramado performs it, optionally recording a video.
 - **Dome (fisheye) view** — 180° equidistant fisheye on the ground and in space; pictures and videos are saved as square dome-master frames for planetarium projectors.
+- **Background music for recordings** — pick a music file (or use the script command `music`) and it is mixed into the saved video, looped and faded out.
 
 **Install:** download the `.deb` from the [latest release](https://github.com/kenjiiida-commits/Soramado/releases/latest) and run `sudo apt install ./soramado_*_all.deb`. Requires Ubuntu 25.04 or later and OpenGL 3.3.
 
