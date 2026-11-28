@@ -6,6 +6,11 @@
 太陽系から宇宙の大規模構造まで 3D で自由に飛び回り、地上に降りればプラネタリウムに。
 月や火星に降り立って、NASA の本物の地形の上から空を見上げることもできます。
 
+### ▶ 2分の宇宙旅行（そらみ窓で作った動画）
+
+<p align="center"><a href="https://youtu.be/IRhOpg19Kio"><img src="https://img.youtube.com/vi/IRhOpg19Kio/hqdefault.jpg" alt="2分の宇宙旅行（YouTube）" width="560"></a><br>
+画像を押すと YouTube で再生します。台本で自動上映し、そのまま録画した動画です（BGM: Instant Crush - Corbyn Kites）</p>
+
 [**⬇ 最新版をダウンロード（DEB）**](https://github.com/kenjiiida-commits/Soramado/releases/latest)　｜　日本語・English　｜　MIT ライセンス　｜　作者: 飯田顕治
 
 > このソフトは国立天文台の Mitaka とは関係のない、独自に作ったソフトです。
@@ -15,6 +20,7 @@ Fly from the Earth to the edge of the observable universe, watch the sky from an
 realistic atmosphere, look through virtual telescopes, and land on the Moon and Mars with real NASA terrain.
 The interface is available in English: **View → 言語 / Language → English**, then restart.
 (Object descriptions, tour captions and the manual are mostly in Japanese.)
+Watch a 2-minute trip made with Soramado: https://youtu.be/IRhOpg19Kio
 [See the English summary below.](#english)
 
 ## スクリーンショット
